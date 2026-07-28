@@ -1,0 +1,16 @@
+# Unreal Engine generated / local files (any depth, incl. tracked plugins)
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# IDE / toolchain
+.vs/
+.vscode/
+.idea/
+*.sln
+*.slnx
+*.suo
+*.VC.db
+*.VC.opendb
+.vsconfig
