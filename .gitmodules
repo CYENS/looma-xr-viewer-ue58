@@ -10,5 +10,5 @@
 [submodule "Plugins/glTFRuntimeWebP"]
 	path = Plugins/glTFRuntimeWebP
 	url = git@github.com:CYENS/glTFRuntimeWebPLoomaXR.git
-	branch = master
+	branch = main
 	ignore = untracked
