@@ -1,5 +1,6 @@
 # Unreal Engine generated / local files (any depth, incl. tracked plugins)
 Binaries/
+Build/
 DerivedDataCache/
 Intermediate/
 Saved/
