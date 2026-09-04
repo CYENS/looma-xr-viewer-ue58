@@ -37,6 +37,41 @@ git submodule update --init --recursive
 > viewer and the asset demo**, so branch it before committing 5.8-specific changes
 > rather than pushing them to `main`.
 
+## Remote selection outlines (HAM-159)
+
+`LoomaSceneSync` marks what everybody else in the room has selected; it never draws.
+It writes a slot number into the custom stencil buffer and publishes the matching
+colours into a Material Parameter Collection, and the project turns the two into an
+outline. The plugin's `.uplugin` sets `"CanContainContent": false`, so it can ship no
+material and no collection: the drawing half has to live here.
+
+This repo supplies the configuration. Two things it cannot supply are assets, and
+they have to be authored in the editor once:
+
+| Config, already set | Where |
+| --- | --- |
+| `r.CustomDepth=3` (*Enabled with Stencil*) | `Config/DefaultEngine.ini` |
+| `RemoteSelectionCollection` → `/Game/Presence/MPC_LoomaRemoteSelection` | `Config/DefaultGame.ini` |
+
+**1. The parameter collection.** Create a Material Parameter Collection at exactly
+`Content/Presence/MPC_LoomaRemoteSelection`, since that is the path the setting above
+already points at. It needs eight vector parameters `LoomaClient1` … `LoomaClient8`,
+whose alpha is the occupancy flag rather than an opacity, and one scalar
+`LoomaClientCount`. Until it exists the plugin logs one line and publishes no colours;
+the stencil is written either way, so nothing else breaks.
+
+**2. The post-process material.** Blendable location *Before Tonemapping*, reading
+`SceneTexture:CustomStencil`. `0` means no border, `1`-`8` are slot *n* thick (a node
+that client selected and won), `129`-`136` are slot *n* thin (a descendant of one of
+those, the "this moves with it" hint). So `IsChild = Stencil > 128` and
+`Slot = Stencil - (IsChild ? 128 : 0)`, then look up `LoomaClient<Slot>`. Match the web
+client's weighting so the two viewers agree: thick at strength 5, thin at 2, and dim
+the occluded half of an edge rather than recolouring it.
+
+`Plugins/LoomaSceneSync/README.md`, *Wiring the outline*, is the normative version of
+both, and `Looma.Room` / `Looma.Claims` in the console report the same state as text,
+which is how to check the protocol half without either asset existing yet.
+
 ## Status
 
 Scaffold. Engine association `5.8`; no content yet.
