@@ -96,10 +96,11 @@ both, and `Looma.Room` / `Looma.Claims` in the console report the same state as 
 which is how to check the protocol half without either asset existing yet.
 
 See [the HAM-209 handoff](docs/handoffs/HAM-209-handoff.md) for verification
-evidence and the remaining cross-client acceptance gate.
+evidence, a safe isolated test launch and the remaining merge sequence.
 
 ## Status
 
 UE 5.8 integration project. Remote-selection assets and demo-level attachment are
-implemented; live web ↔ Unreal acceptance and the dependent plugin merge remain
-separate review gates.
+implemented, and live desktop web ↔ Unreal acceptance passed. The dependent
+plugin merge and viewer/umbrella gitlink updates still require explicit merge
+approval.

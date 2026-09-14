@@ -5,15 +5,15 @@ Updated: 2026-09-14
 ## State
 
 The project-owned collection, post-process material and `LVL_Demo` attachment are
-implemented. The remaining acceptance gate is a live web ↔ Unreal session using
-the reviewed presence implementation in [plugin PR #5](https://github.com/CYENS/looma-scene-sync-plugin/pull/5).
+implemented. Live desktop web ↔ Unreal acceptance passed using the reviewed
+presence implementation in [plugin PR #5](https://github.com/CYENS/looma-scene-sync-plugin/pull/5).
 This work continues [viewer PR #2](https://github.com/CYENS/looma-xr-viewer-ue58/pull/2).
 Neither PR is merged by this work.
 
 | Change | Record |
 | --- | --- |
 | Collection, material and reproducible asset builder | `9d3fc3c` |
-| Dedicated unbound volume, repeatable wiring and documentation | This handoff's change |
+| Dedicated unbound volume, repeatable wiring and documentation | `00f7636` |
 
 The viewer still records plugin pin `9aa0186`; the local validation checkout is
 `67a5d31`. Advancing that gitlink belongs to the approved plugin/viewer merge
@@ -80,7 +80,43 @@ Local evidence from this session is retained under ignored
 - `wiring-load4.log`, `verify_saved_wiring.py`.
 
 These scratch files are local evidence, not repository dependencies. Image
-measurement used the bundled Codex Python runtime with Pillow and NumPy.
+measurement used the bundled Python runtime with Pillow and NumPy.
+
+## Live desktop acceptance completed
+
+Two browser clients and the actual viewer were tested against the isolated
+backend on port 8001 and web frontend on port 5174. The viewer ran SIE with D3D12
+in `LVL_Demo`; the normal active camera exercised the committed volume attachment.
+The viewport screenshot shows the purple selected parent and lighter descendant
+edges. The following checks passed:
+
+| Case | Observed result |
+| --- | --- |
+| Web client A selects the parent | Its `#6047e1` colour reaches the linear MPC; parent stencil 1, child/grandchild 129, unrelated nodes 0 |
+| Unreal selects the other node | The web Outliner displays Unreal's `#47e160` selection colour |
+| Unreal locally selects the parent | The parent's remote stencil and descendant hints clear, along with the remote MPC occupancy |
+| Client B claims first, followed by A | B remains the owner, including after unrelated client C joins |
+| B deselects | The claim passes to A |
+| Switch to another scene reusing the node IDs | Groups and stencils clear; returning to the original scene rehydrates A's claim |
+| Run `Looma.Reconnect` | Reconnect succeeds with no stale claims; the existing reconnect behavior returns to the performance's default `untitled-scene` |
+| Return with `Looma.Scene ham-153-presence-acceptance` | The connected roster rehydrates A's parent and descendant borders correctly |
+| Close client A | All remaining remote stencils and MPC occupancy clear |
+
+Evidence is retained in the umbrella checkout's ignored
+`.worktrees/ham-153-validation/` directory:
+
+- `ue-inbound.png`, `ue-inbound-evidence.json`.
+- `web-unreal-selection.png`, `ue-outbound-evidence.json`.
+- `ue-local-priority-evidence.json`.
+- `ue-contested-evidence.json`, `ue-unrelated-join-evidence.json`,
+  `ue-handover-evidence.json`.
+- `ue-scene-reset-evidence.json`, `ue-scene-return-evidence.json`.
+- `ue-reconnect-evidence.json`, `ue-reconnect-hydration-evidence.json`.
+- `ue-peer-disconnect-evidence.json`.
+
+The test editor processes were stopped and `Config/DefaultGame.ini` was restored
+exactly. The isolated frontend/backend remain available on 5174/8001 for follow-up.
+No additional manual gate remains for these desktop acceptance checks.
 
 ## Details worth preserving
 
@@ -94,22 +130,36 @@ measurement used the bundled Codex Python runtime with Pillow and NumPy.
 - `LoomaSceneSyncSettings` has no direct `unreal.LoomaSceneSyncSettings` Python
   binding. For scratch inspection, load the class by
   `/Script/LoomaSceneSync.LoomaSceneSyncSettings`, obtain its default object and
-  use its native property names with `get_editor_property` / `set_editor_property`.
+  use its native property names with `get_editor_property`.
 - Backend configuration belongs to
   `[/Script/LoomaSceneSync.LoomaSceneSyncSettings]`. Isolated tests must override
   `BackendUrl` to their local backend rather than use the saved deployed address.
   Editing the settings default object through `set_editor_property` can persist
   those test values into `DefaultGame.ini`; preserve and restore that file when
-  using temporary identities or addresses.
+  that has happened. Use launch overrides for temporary addresses, as below,
+  instead of editing the settings default object.
 
-## Next acceptance gate
+## Repeating the isolated desktop check
 
-Use two browser clients and the viewer against the same isolated backend and
-scene. Check selections in both directions, ownership conflicts, descendant
-weighting, local-selection priority, deselection, disconnect/reconnect and an
-unrelated join. Observe the viewer's normal active camera so the committed volume
-attachment is exercised. Confirm colours remain correct after scene reloads and
-newly loaded meshes. Record that result before calling HAM-153 complete.
+With the isolated backend running on 8001, launch from the viewer repository:
+
+```powershell
+$editor = 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe'
+$project = Join-Path (Get-Location) 'LoomaXRViewerUE58.uproject'
+& $editor $project '-ini:Game:[/Script/LoomaSceneSync.LoomaSceneSyncSettings]:BackendUrl=http://127.0.0.1:8001' -saveddirsuffix=HAM153Acceptance
+```
+
+Open `LVL_Demo`, click **Play**, then open the console and enter
+`Looma.Scene ham-153-presence-acceptance`. Join that scene from the isolated web
+frontend at `http://localhost:5174`, using separate browser sessions for the two
+clients. Use `Looma.Room` and `Looma.Claims` to inspect presence while checking the
+normal viewer camera. After `Looma.Reconnect`, explicitly select the fixture scene
+again: reconnect currently returns to the performance's default scene.
+
+The Saved-directory suffix isolates test session/cache files, and the launch
+override keeps the deployed backend address in `DefaultGame.ini` unchanged.
+
+## Remaining merge gate
 
 After review and explicit merge approval, merge the plugin and then advance the
 viewer and umbrella gitlinks. Unity is outside this acceptance scope.
