@@ -10,7 +10,8 @@ public class LoomaXRViewerUE58 : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] {  });
+		// The Live Link proof (HAM-316): a JSON-over-UDP source and a pose applier, in LiveLink/.
+		PrivateDependencyModuleNames.AddRange(new string[] { "LiveLinkInterface", "Sockets", "Networking", "Json" });
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
