@@ -80,6 +80,15 @@ public:
     FVector SourceUpAxis = FVector(0, 0, 1);
     FVector SourceForwardAxis = FVector(0, 1, 0);
 
+    /**
+     * Send the pose on to the other clients, through the scene socket
+     * (ULoomaSceneSyncSubsystem::PublishPose). Only for a character the scene
+     * sync spawned, since the wire names a scene node.
+     */
+    bool bPublish = true;
+    /** Frames a second sent to the other clients. */
+    float PublishRate = 30.0f;
+
     virtual void NativeInitializeAnimation() override;
     virtual void NativeUpdateAnimation(float DeltaSeconds) override;
 
@@ -117,4 +126,11 @@ private:
     FVector HipsLocation = FVector::ZeroVector;
     bool bHasPose = false;
     bool bWarned = false;
+
+    // --- The same frame in the wire's terms (docs/rig-format.md, "Live pose") ---
+    /** One per row of the bone table, which is the wire's own order. */
+    TArray<FQuat> WireRotations;
+    /** Left, up, forward, in leg lengths. */
+    FVector WireHips = FVector::ZeroVector;
+    float SincePublish = 0.0f;
 };
