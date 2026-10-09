@@ -88,6 +88,8 @@ public:
     bool bPublish = true;
     /** Frames a second sent to the other clients. */
     float PublishRate = 30.0f;
+    /** Where in its interval this character's next frame falls, 0 to 1. */
+    void SetPublishPhase(float Phase) { SincePublish = PublishRate > 0.0f ? Phase / PublishRate : 0.0f; }
 
     virtual void NativeInitializeAnimation() override;
     virtual void NativeUpdateAnimation(float DeltaSeconds) override;
