@@ -2,9 +2,13 @@
 
 #include "Animation/AnimNodeBase.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/GameInstance.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/World.h"
 #include "Features/IModularFeatures.h"
 #include "ILiveLinkClient.h"
+#include "LoomaSceneSyncSubsystem.h"
+#include "LoomaSyncedActor.h"
 #include "ReferenceSkeleton.h"
 #include "Roles/LiveLinkAnimationRole.h"
 #include "Roles/LiveLinkAnimationTypes.h"
@@ -22,6 +26,9 @@ namespace
 
     // Row 0 is the pelvis. SMPL has three spine joints and so has the rig; its
     // "collar" is the rig's shoulder and its "shoulder" the rig's arm.
+    //
+    // The rows are in the rig format's BODY order, the 52 bones with the fingers
+    // left out, because that is the order the wire's `pose` carries them in.
     const FBonePair BoneTable[] = {
         {TEXT("Pelvis"), TEXT("Hips")},
         {TEXT("Spine1"), TEXT("Spine")},
@@ -320,6 +327,7 @@ bool ULoomaLivePoseAnimInstance::BuildTarget()
 
     Rotations.Init(FQuat::Identity, BoneCount);
     HasRotation.Init(false, BoneCount);
+    WireRotations.Init(FQuat::Identity, TableRows);
     HipsLocation = Local[HipsBone].GetLocation();
 
     const int32 Spine = TargetBones[Row(TEXT("Spine"))];
@@ -440,11 +448,15 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
                 WorldToCharacter * FLoomaBasis::FromQuat(PelvisWorld.GetRotation()) * CharacterInSource;
             const FLoomaBasis InComponent = CharacterInComponent * Turn * CharacterInComponent.Transposed() * HipsRest;
             Rotations[To] = (HipsParentInverse * InComponent).ToQuat();
+            WireRotations[Index] = Turn.ToQuat();
         }
         else
         {
             const FLoomaBasis Turn = SourceToCharacter * FLoomaBasis::FromQuat(T[From].GetRotation()) * CharacterInSource;
             Rotations[To] = (CharacterInBone * Turn * BoneToCharacter).ToQuat();
+            // `Turn` is the rotation in the character's own left, up, forward,
+            // which are the rig file's X, Y, Z: the wire's rotation as it stands.
+            WireRotations[Index] = Turn.ToQuat();
         }
         HasRotation[To] = true;
     }
@@ -465,6 +477,22 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
         }
         const FVector Scaled = (InCharacter - Origin) * Scale;
         HipsLocation = HipsParentInverse.Apply(CharacterInComponent.Apply(Scaled));
+        WireHips = (InCharacter - Origin) / SourceLeg;
     }
     bHasPose = true;
+
+    // On to the other clients, at its own rate: this runs every rendered frame.
+    SincePublish += DeltaSeconds;
+    if (bPublish && PublishRate > 0.0f && SincePublish >= 1.0f / PublishRate)
+    {
+        SincePublish = 0.0f;
+        const USkeletalMeshComponent* Component = GetSkelMeshComponent();
+        const ALoomaSyncedActor* Actor = Component ? Cast<ALoomaSyncedActor>(Component->GetOwner()) : nullptr;
+        const UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+        ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
+        if (Actor && Sync)
+        {
+            Sync->PublishPose(Actor->Id, WireHips, WireRotations);
+        }
+    }
 }
