@@ -2,9 +2,15 @@
 // characters in the scene from the Moverse simulator, with no assets to author.
 //
 //   Looma.LiveLink.Listen [port]     Start reading the simulator's datagrams (54321).
-//   Looma.LiveLink.Drive [subject]   Make every LoomaMixamo character follow a subject
+//   Looma.LiveLink.Drive [n] [subject...]
+//                                    Make the LoomaMixamo characters follow a subject
 //                                    (Actor0). Several subjects, e.g. "Actor0 Actor1",
-//                                    are dealt out to the characters in turn.
+//                                    are dealt out to the characters in turn. A leading
+//                                    number drives only that many, e.g. "3 Actor0".
+//                                    The others on the scene are sent a fixed budget of
+//                                    frames a second shared between the driven
+//                                    characters, so a few are smooth on the web and a
+//                                    crowd is not.
 //   Looma.LiveLink.Release           Give the characters back: they return to their
 //                                    reference pose, and a clip plays again the next
 //                                    time the scene sets one.
@@ -68,6 +74,12 @@ namespace
         return Out;
     }
 
+    // Frames a second this client sends to the other clients, over all the
+    // characters it drives. A frame is about 650 bytes, so this is about 80 kB/s.
+    // The first end-to-end run sent 29 characters at 30 Hz each through a tunnel
+    // and lost its sockets to keepalive timeouts.
+    const float PublishBudget = 120.0f;
+
     FAutoConsoleCommandWithWorldAndArgs GListen(
         TEXT("Looma.LiveLink.Listen"),
         TEXT("Read the Moverse simulator's JSON Live Link datagrams: Looma.LiveLink.Listen [port=54321]."),
@@ -99,15 +111,30 @@ namespace
         TEXT("Make every LoomaMixamo character follow a Live Link subject: Looma.LiveLink.Drive [subject=Actor0] [subject...]."),
         FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>& Args, UWorld* World) {
             TArray<FName> Subjects;
+            int32 Limit = MAX_int32;
             for (const FString& Arg : Args)
             {
+                if (Arg.IsNumeric() && Subjects.Num() == 0)
+                {
+                    Limit = FMath::Max(1, FCString::Atoi(*Arg));
+                    continue;
+                }
                 Subjects.Add(FName(*Arg));
             }
             if (Subjects.Num() == 0)
             {
                 Subjects.Add(TEXT("Actor0"));
             }
-            const TArray<USkeletalMeshComponent*> Rigs = RigsIn(World);
+            TArray<USkeletalMeshComponent*> Rigs = RigsIn(World);
+            // By name, so "the first three" are the same three every time.
+            Rigs.Sort([](const USkeletalMeshComponent& A, const USkeletalMeshComponent& B) {
+                return GetNameSafe(A.GetOwner()) < GetNameSafe(B.GetOwner());
+            });
+            if (Rigs.Num() > Limit)
+            {
+                Rigs.SetNum(Limit);
+            }
+            const float Rate = Rigs.Num() > 0 ? FMath::Clamp(PublishBudget / Rigs.Num(), 1.0f, 30.0f) : 30.0f;
             for (int32 Index = 0; Index < Rigs.Num(); ++Index)
             {
                 USkeletalMeshComponent* Component = Rigs[Index];
@@ -116,13 +143,16 @@ namespace
                 if (ULoomaLivePoseAnimInstance* Instance = Cast<ULoomaLivePoseAnimInstance>(Component->GetAnimInstance()))
                 {
                     Instance->SubjectName = Subjects[Index % Subjects.Num()];
+                    Instance->PublishRate = Rate;
+                    // Spread over the interval, so the frames do not all leave together.
+                    Instance->SetPublishPhase(Rigs.Num() > 0 ? float(Index) / Rigs.Num() : 0.0f);
                 }
 #if WITH_EDITOR
                 // An editor world does not tick animation unless asked to.
                 Component->SetUpdateAnimationInEditor(true);
 #endif
             }
-            UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("%d character(s) now follow Live Link%s."), Rigs.Num(),
+            UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("%d character(s) now follow Live Link, sent on at %.0f frames a second each%s."), Rigs.Num(), Rate,
                    GSource.IsValid() ? TEXT("") : TEXT("; nothing is listening yet, run Looma.LiveLink.Listen"));
         }));
 
