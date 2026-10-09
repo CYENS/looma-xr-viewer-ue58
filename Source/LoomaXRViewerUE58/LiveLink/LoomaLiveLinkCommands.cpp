@@ -25,6 +25,7 @@
 #include "HAL/IConsoleManager.h"
 #include "ILiveLinkClient.h"
 #include "LoomaJsonLiveLinkSource.h"
+#include "LoomaLiveLink.h"
 #include "LoomaLivePoseAnimInstance.h"
 #include "UObject/UObjectIterator.h"
 
@@ -80,30 +81,35 @@ namespace
     // and lost its sockets to keepalive timeouts.
     const float PublishBudget = 120.0f;
 
+    bool Listen(int32 Port)
+    {
+        ILiveLinkClient* Client = LiveLinkClient();
+        if (!Client)
+        {
+            UE_LOG(LogLoomaLiveLinkCommands, Error, TEXT("Live Link is not available; is the LiveLink plugin enabled?"));
+            return false;
+        }
+        if (GSource.IsValid())
+        {
+            Client->RemoveSource(GSource);
+            GSource.Reset();
+        }
+        TSharedPtr<FLoomaJsonLiveLinkSource> Source = MakeShared<FLoomaJsonLiveLinkSource>(Port);
+        if (!Source->IsListening())
+        {
+            return false; // the source said why
+        }
+        GSource = Source;
+        Client->AddSource(Source);
+        UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Listening for the Moverse simulator on UDP %d."), Port);
+        return true;
+    }
+
     FAutoConsoleCommandWithWorldAndArgs GListen(
         TEXT("Looma.LiveLink.Listen"),
         TEXT("Read the Moverse simulator's JSON Live Link datagrams: Looma.LiveLink.Listen [port=54321]."),
         FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>& Args, UWorld*) {
-            ILiveLinkClient* Client = LiveLinkClient();
-            if (!Client)
-            {
-                UE_LOG(LogLoomaLiveLinkCommands, Error, TEXT("Live Link is not available; is the LiveLink plugin enabled?"));
-                return;
-            }
-            const int32 Port = Args.Num() > 0 ? FCString::Atoi(*Args[0]) : 54321;
-            if (GSource.IsValid())
-            {
-                Client->RemoveSource(GSource);
-                GSource.Reset();
-            }
-            TSharedPtr<FLoomaJsonLiveLinkSource> Source = MakeShared<FLoomaJsonLiveLinkSource>(Port);
-            if (!Source->IsListening())
-            {
-                return; // the source said why
-            }
-            GSource = Source;
-            Client->AddSource(Source);
-            UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Listening on UDP %d. Start the simulator, then Looma.LiveLink.Drive."), Port);
+            Listen(Args.Num() > 0 ? FCString::Atoi(*Args[0]) : LoomaLiveLink::DefaultPort);
         }));
 
     FAutoConsoleCommandWithWorldAndArgs GDrive(
@@ -200,4 +206,21 @@ namespace
                        Instance ? *FString::Printf(TEXT("follows %s"), *Instance->SubjectName.ToString()) : TEXT("not following"));
             }
         }));
+}
+
+// --- What the driver shares with the commands (LoomaLiveLink.h) -------------------
+
+bool LoomaLiveLink::EnsureListening(int32 Port)
+{
+    return (GSource.IsValid() && GSource->IsListening()) || Listen(Port);
+}
+
+ILiveLinkClient* LoomaLiveLink::Client()
+{
+    return LiveLinkClient();
+}
+
+bool LoomaLiveLink::IsRig(const USkeletalMeshComponent* Component)
+{
+    return IsLoomaRig(Component);
 }
