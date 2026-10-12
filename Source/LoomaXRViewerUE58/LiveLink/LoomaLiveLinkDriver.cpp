@@ -9,6 +9,8 @@
 #include "LoomaLivePoseAnimInstance.h"
 #include "LoomaSceneSyncSubsystem.h"
 #include "LoomaSyncedActor.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogLoomaLiveLinkDriver, Log, All);
 
@@ -56,7 +58,13 @@ void ULoomaLiveLinkDriver::Refresh()
         // Once. If the port is taken the source says so, and Looma.LiveLink.Listen
         // can be given another.
         bTriedListening = true;
-        LoomaLiveLink::EnsureListening();
+        // -LoomaNoLiveLink: a client that only watches. It opens no mocap port,
+        // so a second viewer on the machine that has the mocap does not take
+        // the datagrams, and shows what the first one sends.
+        if (!FParse::Param(FCommandLine::Get(), TEXT("LoomaNoLiveLink")))
+        {
+            LoomaLiveLink::EnsureListening();
+        }
     }
 
     TArray<FName> Subjects;
@@ -73,8 +81,11 @@ void ULoomaLiveLinkDriver::Refresh()
         Sync->PublishLiveSubjects(Subjects);
     }
 
-    // Who should be driven, and by whom.
+    // Who should be driven, and by whom: a live subject here, or failing that
+    // the poses another client is sending for the node.
     TMap<USkeletalMeshComponent*, FName> Wanted;
+    TSet<USkeletalMeshComponent*> Remote;
+    FLoomaLivePose Unused;
     TMap<USkeletalMeshComponent*, ALoomaSyncedActor*> Owner;
     for (TActorIterator<ALoomaSyncedActor> It(World); It; ++It)
     {
@@ -88,6 +99,15 @@ void ULoomaLiveLinkDriver::Refresh()
         if (!Subject.IsEmpty() && Subjects.Contains(FName(*Subject)))
         {
             Wanted.Add(Component, FName(*Subject));
+            continue;
+        }
+        // Not one Looma.LiveLink.Drive is driving from the console: that is the
+        // user's own doing and stays until they release it.
+        const ULoomaLivePoseAnimInstance* Current = Cast<ULoomaLivePoseAnimInstance>(Component->GetAnimInstance());
+        const bool bConsoleDriven = Current && !Current->IsFollowingScene() && !Driven.Contains(Component);
+        if (Sync && !bConsoleDriven && Sync->GetLivePose(It->Id, Unused))
+        {
+            Remote.Add(Component);
         }
     }
 
@@ -95,7 +115,7 @@ void ULoomaLiveLinkDriver::Refresh()
     for (auto It = Driven.CreateIterator(); It; ++It)
     {
         USkeletalMeshComponent* Component = It->Get();
-        if (Component && Wanted.Contains(Component))
+        if (Component && (Wanted.Contains(Component) || Remote.Contains(Component)))
         {
             continue;
         }
@@ -134,10 +154,32 @@ void ULoomaLiveLinkDriver::Refresh()
         }
         if (Instance)
         {
+            Instance->FollowScene(false);
             Instance->SubjectName = Pair.Value;
             Instance->PublishRate = Rate;
             Driven.Add(Component);
         }
         ++Index;
+    }
+
+    // And the ones somebody else is driving: shown here, not sent on.
+    for (USkeletalMeshComponent* Component : Remote)
+    {
+        ULoomaLivePoseAnimInstance* Instance = Cast<ULoomaLivePoseAnimInstance>(Component->GetAnimInstance());
+        if (!Instance)
+        {
+            Component->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+            Component->SetAnimInstanceClass(ULoomaLivePoseAnimInstance::StaticClass());
+            Instance = Cast<ULoomaLivePoseAnimInstance>(Component->GetAnimInstance());
+            if (Instance)
+            {
+                UE_LOG(LogLoomaLiveLinkDriver, Log, TEXT("Character '%s' now follows the pose another client sends."), *Owner[Component]->Id);
+            }
+        }
+        if (Instance)
+        {
+            Instance->FollowScene(true);
+            Driven.Add(Component);
+        }
     }
 }

@@ -371,7 +371,9 @@ namespace
             {
                 const ULoomaLivePoseAnimInstance* Instance = Cast<ULoomaLivePoseAnimInstance>(Component->GetAnimInstance());
                 UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("  character %s: %s"), *GetNameSafe(Component->GetOwner()),
-                       Instance ? *FString::Printf(TEXT("follows %s"), *Instance->SubjectName.ToString()) : TEXT("not following"));
+                       !Instance ? TEXT("not following")
+                       : Instance->IsFollowingScene() ? TEXT("follows the pose another client sends")
+                       : *FString::Printf(TEXT("follows %s"), *Instance->SubjectName.ToString()));
             }
         }));
 }

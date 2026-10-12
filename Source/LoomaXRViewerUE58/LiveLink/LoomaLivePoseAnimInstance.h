@@ -67,6 +67,11 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
  *
  * The Moverse maths was checked outside Unreal first, by posing a generated rig
  * with the simulator's recorded frames in Python.
+ *
+ * It also plays back a pose ANOTHER client published (FollowScene): the same
+ * wire frame this class sends, read from the scene sync and written into this
+ * mesh's bones by the same last step. So a character driven on one machine
+ * moves on every other, with no Live Link there.
  */
 UCLASS(Transient, NotBlueprintable)
 class LOOMAXRVIEWERUE58_API ULoomaLivePoseAnimInstance : public UAnimInstance
@@ -89,6 +94,14 @@ public:
     /** Where in its interval this character's next frame falls, 0 to 1. */
     void SetPublishPhase(float Phase) { SincePublish = PublishRate > 0.0f ? Phase / PublishRate : 0.0f; }
 
+    /**
+     * Follow the pose other clients publish for this character's scene node
+     * (ULoomaSceneSyncSubsystem::GetLivePose) rather than a Live Link subject.
+     * Nothing is published back.
+     */
+    void FollowScene(bool bFollow);
+    bool IsFollowingScene() const { return bFromScene; }
+
     virtual void NativeInitializeAnimation() override;
     virtual void NativeUpdateAnimation(float DeltaSeconds) override;
 
@@ -100,6 +113,16 @@ private:
 
     bool BuildTarget();
     bool BuildSource(const TArray<FName>& BoneNames);
+    void UpdateFromScene(float DeltaSeconds);
+    /**
+     * Pose the mesh from a frame in the wire's terms. `Alpha` is how far to move
+     * towards it, 1 for all the way. `Hips` null leaves the hips where they are.
+     */
+    void SetFromWire(const FVector* Hips, const TArray<FQuat>& Wire, float Alpha);
+
+    bool bFromScene = false;
+    /** Following the scene: a first frame has been taken whole. */
+    bool bSceneStarted = false;
 
     // --- The target rig, measured once from its reference pose ---------------
     bool bTargetReady = false;

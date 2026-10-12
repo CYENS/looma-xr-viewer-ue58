@@ -17,8 +17,11 @@ class USkeletalMeshComponent;
  *
  *  - gives a character whose subject is live a ULoomaLivePoseAnimInstance, which
  *    poses it here and publishes the pose to the other clients;
- *  - takes it back off one whose component went, or whose subject did, and
- *    restarts the clip the node names.
+ *  - gives a character ANOTHER client is sending poses for the same instance,
+ *    told to follow the scene instead: this client then needs no Live Link to
+ *    show a character driven elsewhere;
+ *  - takes it back off one whose component went, or whose subject did, or whose
+ *    poses stopped coming, and restarts the clip the node names.
  *
  * It also starts listening for the Moverse simulator, and tells the other
  * clients every two seconds which subjects are live, which is what their
