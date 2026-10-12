@@ -3,7 +3,9 @@
 #include "CoreMinimal.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimInstanceProxy.h"
+#include "LoomaLiveLinkProfiles.h"
 #include "LoomaLiveRetarget.h"
+#include "LoomaPoseSmoother.h"
 #include "LoomaLivePoseAnimInstance.generated.h"
 
 /** Hands the game thread's pose to the worker thread that evaluates it. */
@@ -62,6 +64,12 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
  * with the simulator's recorded frames in Python. The source half, a Live Link
  * frame to a wire pose, is FLoomaLiveRetarget, apart from this class so that
  * Tests/LoomaLiveRetargetTests.cpp can run it with no mesh.
+ *
+ * A source that shakes, such as a camera-based capture, is steadied on the way
+ * (FLoomaPoseSmoother), by as much as its profile says. The wire pose is what
+ * is steadied, so every client gets the same one. Looma.LiveLink.Smooth 0
+ * turns that off; Looma.LiveLink.SmoothMinCutoff and SmoothBeta try other
+ * settings without editing the profile.
  *
  * It also plays back a pose ANOTHER client published (FollowScene): the same
  * wire frame this class sends, read from the scene sync and written into this
@@ -137,6 +145,9 @@ private:
     TArray<FName> SourceNames;
     bool bSourceReady = false;
     FLoomaLiveRetarget Retarget;
+    /** What the source's profile asks for, and the filter that does it (HAM-324). */
+    FLoomaSmoothing Smoothing;
+    FLoomaPoseSmoother Smoother;
     /** The source the profile was chosen for. The same subject name can move to another source. */
     FString SourceType;
     float SinceSourceCheck = 0.0f;

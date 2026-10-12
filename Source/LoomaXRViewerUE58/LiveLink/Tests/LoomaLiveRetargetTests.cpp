@@ -1,5 +1,6 @@
 #include "../LoomaLiveLinkProfiles.h"
 #include "../LoomaLiveRetarget.h"
+#include "../LoomaPoseSmoother.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -192,6 +193,9 @@ bool FLoomaLiveLinkProfilesTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("moverse-plugin undoes the plugin's quarter turn"),
              AngleBetween(Plugin->RootRotation, FQuat(0.7071068, 0, 0, 0.7071068)) < 1e-4);
     TestTrue(TEXT("a profile like another does not take its root rotation"), Moverse->RootRotation.IsIdentity());
+    TestTrue(TEXT("a camera-based capture is smoothed"), Moverse->Smoothing.IsOn());
+    TestEqual(TEXT("a profile like another takes its smoothing"), Plugin->Smoothing.MinCutoff, Moverse->Smoothing.MinCutoff);
+    TestFalse(TEXT("an inertial suit is not"), Xsens->Smoothing.IsOn());
 
     const FPerformer AsMoverse(*Moverse);
     const FPerformer AsXsens(*Xsens);
@@ -377,6 +381,115 @@ bool FLoomaLiveRetargetFloorTest::RunTest(const FString& Parameters)
     Finding.Restart();
     Finding.Evaluate(Sunk.Local, Sunk.Parents, Frame, true, Wire, Hips);
     TestTrue(TEXT("restarting finds the floor afresh"), FMath::IsNearlyEqual(Hips.Y, 1.0, 1e-4));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLoomaPoseSmootherTest,
+    "Looma.LiveLink.Retarget.Smoothing",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FLoomaPoseSmootherTest::RunTest(const FString& Parameters)
+{
+    const FLoomaLiveLinkProfile* Profile = Named(TEXT("moverse"));
+    if (!TestNotNull(TEXT("moverse"), Profile))
+    {
+        return false;
+    }
+    const FLoomaSmoothing Settings = Profile->Smoothing;
+    const double Frame = 1.0 / 60.0;
+    const FVector Up(0, 1, 0);
+    auto Pose = [](const FQuat& Rotation) {
+        TArray<FQuat> Wire;
+        Wire.Init(Rotation, LoomaRigBody::Num);
+        return Wire;
+    };
+    FRandomStream Random(7);
+    auto Shaken = [&Random](const FQuat& Rotation, double Sigma) {
+        const FVector Axis(Random.FRandRange(-1.0f, 1.0f), Random.FRandRange(-1.0f, 1.0f), Random.FRandRange(-1.0f, 1.0f));
+        return (Rotation * FQuat(Axis.GetSafeNormal(), Random.FRandRange(-1.0f, 1.0f) * Sigma)).GetNormalized();
+    };
+
+    // Off: the pose goes through untouched.
+    FLoomaPoseSmoother Off;
+    TArray<FQuat> Wire = Pose(About(Up, 20 * Degrees).ToQuat());
+    const TArray<FQuat> Before = Wire;
+    Off.Apply(Wire, nullptr, Frame, FLoomaSmoothing());
+    TestTrue(TEXT("with no smoothing asked for, the pose is used as it comes"), Wire[3].Equals(Before[3], 0.0));
+
+    // A still performer who shakes by two degrees is steadied.
+    FLoomaPoseSmoother Still;
+    const FQuat Held = About(Up, 20 * Degrees).ToQuat();
+    double RawShake = 0.0, SmoothShake = 0.0, Drift = 0.0;
+    FQuat LastRaw = Held, LastSmooth = Held;
+    for (int32 Step = 0; Step < 600; ++Step)
+    {
+        Wire = Pose(Shaken(Held, 2 * Degrees));
+        const FQuat RawNow = Wire[3];
+        FVector Hips(0, 1, 0);
+        Still.Apply(Wire, &Hips, Frame, Settings);
+        if (Step >= 60)
+        {
+            RawShake += LastRaw.AngularDistance(RawNow);
+            SmoothShake += LastSmooth.AngularDistance(Wire[3]);
+            Drift = FMath::Max(Drift, Wire[3].AngularDistance(Held));
+        }
+        LastRaw = RawNow;
+        LastSmooth = Wire[3];
+    }
+    TestTrue(TEXT("a still performer shakes less than a third as much"), SmoothShake < RawShake / 3.0);
+    TestTrue(TEXT("and stays where they are"), Drift < 1.5 * Degrees);
+
+    // A fast, clean movement is followed closely: a bone turning 180 degrees a second.
+    FLoomaPoseSmoother Moving;
+    double Behind = 0.0;
+    for (int32 Step = 0; Step < 120; ++Step)
+    {
+        const FQuat Now = About(Up, Step * Frame * 180 * Degrees).ToQuat();
+        Wire = Pose(Now);
+        Moving.Apply(Wire, nullptr, Frame, Settings);
+        Behind = Step >= 60 ? FMath::Max(Behind, Wire[3].AngularDistance(Now)) : Behind;
+    }
+    TestTrue(TEXT("a bone turning half a turn a second is followed within eight degrees"), Behind < 8 * Degrees);
+
+    // The same frame coming round again is not a new one.
+    FLoomaPoseSmoother Repeating;
+    Wire = Pose(FQuat::Identity);
+    Repeating.Apply(Wire, nullptr, Frame, Settings);
+    Wire = Pose(About(Up, 30 * Degrees).ToQuat());
+    Repeating.Apply(Wire, nullptr, Frame, Settings);
+    const FQuat AfterOne = Wire[3];
+    for (int32 Step = 0; Step < 3; ++Step)
+    {
+        Wire = Pose(About(Up, 30 * Degrees).ToQuat());
+        Repeating.Apply(Wire, nullptr, Frame / 4, Settings);
+    }
+    TestTrue(TEXT("a frame that comes round again moves nothing"), Wire[3].Equals(AfterOne, 0.0));
+    TestTrue(TEXT("a jump is not taken whole"), AfterOne.AngularDistance(FQuat::Identity) < 25 * Degrees);
+
+    // After a gap the next frame is a new start.
+    Wire = Pose(About(Up, 90 * Degrees).ToQuat());
+    Repeating.Apply(Wire, nullptr, 2.0, Settings);
+    TestTrue(TEXT("after a gap the pose is taken whole"), Wire[3].AngularDistance(About(Up, 90 * Degrees).ToQuat()) < 1e-4);
+
+    // The hips are steadied with the rest.
+    FLoomaPoseSmoother Walking;
+    double HipsShake = 0.0, RawHipsShake = 0.0;
+    FVector LastHips(0, 1, 0), LastRawHips(0, 1, 0);
+    for (int32 Step = 0; Step < 300; ++Step)
+    {
+        Wire = Pose(Shaken(Held, 1 * Degrees));
+        FVector Hips(0, 1.0 + Random.FRandRange(-0.01f, 0.01f), 0);
+        const FVector RawHips = Hips;
+        Walking.Apply(Wire, &Hips, Frame, Settings);
+        if (Step >= 60)
+        {
+            RawHipsShake += FVector::Dist(LastRawHips, RawHips);
+            HipsShake += FVector::Dist(LastHips, Hips);
+        }
+        LastRawHips = RawHips;
+        LastHips = Hips;
+    }
+    TestTrue(TEXT("hips that shake are steadied too"), HipsShake < RawHipsShake / 3.0);
     return true;
 }
 
