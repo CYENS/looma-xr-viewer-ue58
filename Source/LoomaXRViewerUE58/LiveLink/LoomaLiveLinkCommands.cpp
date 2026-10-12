@@ -11,6 +11,13 @@
 //                                    frames a second shared between the driven
 //                                    characters, so a few are smooth on the web and a
 //                                    crowd is not.
+//   Looma.LiveLink.Assign <subject> [name]
+//                                    Put a Live Link component on a character, in the
+//                                    SCENE: the web shows it and it is saved, the same
+//                                    as adding it in the web inspector. The character
+//                                    is the selected one, or every character whose name
+//                                    contains [name].
+//   Looma.LiveLink.Unassign [name]   Remove that component again.
 //   Looma.LiveLink.Release           Give the characters back: they return to their
 //                                    reference pose, and a clip plays again the next
 //                                    time the scene sets one.
@@ -19,6 +26,7 @@
 // The simulator: `cd code/moverse-simulation-python && python live_link_broadcaster.py`.
 
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/GameInstance.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "Features/IModularFeatures.h"
@@ -28,7 +36,14 @@
 #include "LoomaLiveLink.h"
 #include "LoomaLivePoseAnimInstance.h"
 #include "LoomaMvnLiveLinkSource.h"
+#include "LoomaSceneSyncSubsystem.h"
+#include "LoomaSyncedActor.h"
 #include "UObject/UObjectIterator.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "Engine/Selection.h"
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogLoomaLiveLinkCommands, Log, All);
 
@@ -209,6 +224,122 @@ namespace
                 }
             }
             UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("%d character(s) released."), Released);
+        }));
+
+    bool IsCharacter(const ALoomaSyncedActor* Actor)
+    {
+        return IsValid(Actor) && IsLoomaRig(Actor->FindComponentByClass<USkeletalMeshComponent>());
+    }
+
+    // The characters a command is about: the ones whose name contains `Name`, or
+    // with no name, the ones selected (in the viewer, or in the editor's outliner).
+    TArray<ALoomaSyncedActor*> CharactersFor(UWorld* World, const ULoomaSceneSyncSubsystem& Sync, const FString& Name)
+    {
+        TArray<ALoomaSyncedActor*> Out;
+        if (!Name.IsEmpty())
+        {
+            for (TObjectIterator<ALoomaSyncedActor> It; It; ++It)
+            {
+                if (It->GetWorld() == World && IsCharacter(*It)
+                    && (It->DisplayName.Contains(Name, ESearchCase::IgnoreCase) || It->Id.StartsWith(Name, ESearchCase::IgnoreCase)))
+                {
+                    Out.Add(*It);
+                }
+            }
+            return Out;
+        }
+        for (ALoomaSyncedActor* Actor : Sync.GetLocalSelection())
+        {
+            if (IsCharacter(Actor))
+            {
+                Out.AddUnique(Actor);
+            }
+        }
+#if WITH_EDITOR
+        if (GEditor)
+        {
+            for (FSelectionIterator It(GEditor->GetSelectedActorIterator()); It; ++It)
+            {
+                ALoomaSyncedActor* Actor = Cast<ALoomaSyncedActor>(*It);
+                if (Actor && Actor->GetWorld() == World && IsCharacter(Actor))
+                {
+                    Out.AddUnique(Actor);
+                }
+            }
+        }
+#endif
+        return Out;
+    }
+
+    void Assign(UWorld* World, const FString& Subject, const FString& Name)
+    {
+        UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+        ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
+        if (!Sync || !Sync->IsSyncConnected())
+        {
+            UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("Not connected to a scene, so there is nothing to write the choice into. Press Play first."));
+            return;
+        }
+        const TArray<ALoomaSyncedActor*> Characters = CharactersFor(World, *Sync, Name);
+        if (Characters.Num() == 0)
+        {
+            UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("%s Rigged characters in this scene:"),
+                   Name.IsEmpty() ? TEXT("No rigged character is selected; select one or give part of its name.")
+                                  : *FString::Printf(TEXT("No rigged character's name contains '%s'."), *Name));
+            for (TObjectIterator<ALoomaSyncedActor> It; It; ++It)
+            {
+                if (It->GetWorld() == World && IsCharacter(*It))
+                {
+                    const FString& Now = It->GetComponents().LiveLinkSubject;
+                    UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("  %s%s"), *It->DisplayName,
+                           Now.IsEmpty() ? TEXT("") : *FString::Printf(TEXT("  (follows %s)"), *Now));
+                }
+            }
+            return;
+        }
+        if (!Subject.IsEmpty())
+        {
+            bool bLive = false;
+            if (ILiveLinkClient* Client = LiveLinkClient())
+            {
+                for (const FLiveLinkSubjectKey& Key : Client->GetSubjects(/*bIncludeDisabledSubject=*/false, /*bIncludeVirtualSubject=*/false))
+                {
+                    bLive |= Key.SubjectName.Name == FName(*Subject);
+                }
+            }
+            if (!bLive)
+            {
+                UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("No Live Link subject is called '%s' right now. Set anyway; the character moves when one is."), *Subject);
+            }
+        }
+        for (ALoomaSyncedActor* Character : Characters)
+        {
+            const bool bSent = Sync->SetLiveLinkSubject(Character, Subject);
+            UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("%s: %s%s"), *Character->DisplayName,
+                   Subject.IsEmpty() ? TEXT("Live Link component removed") : *FString::Printf(TEXT("Live Link subject set to %s"), *Subject),
+                   bSent ? TEXT("") : TEXT(" (NOT sent)"));
+        }
+    }
+
+    FAutoConsoleCommandWithWorldAndArgs GAssign(
+        TEXT("Looma.LiveLink.Assign"),
+        TEXT("Put a Live Link component on the selected character, in the scene: Looma.LiveLink.Assign <subject> [part of a character's name]."),
+        FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>& Args, UWorld* World) {
+            if (Args.Num() == 0)
+            {
+                UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("Which subject? Looma.LiveLink.Assign <subject> [part of a character's name]. Looma.LiveLink.Status lists the subjects."));
+                return;
+            }
+            TArray<FString> Rest = Args;
+            Rest.RemoveAt(0);
+            Assign(World, Args[0], FString::Join(Rest, TEXT(" ")));
+        }));
+
+    FAutoConsoleCommandWithWorldAndArgs GUnassign(
+        TEXT("Looma.LiveLink.Unassign"),
+        TEXT("Remove the Live Link component from the selected character, in the scene: Looma.LiveLink.Unassign [part of a character's name]."),
+        FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>& Args, UWorld* World) {
+            Assign(World, FString(), FString::Join(Args, TEXT(" ")));
         }));
 
     FAutoConsoleCommandWithWorldAndArgs GStatus(
