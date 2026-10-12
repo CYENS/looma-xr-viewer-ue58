@@ -370,10 +370,25 @@ namespace
             for (const USkeletalMeshComponent* Component : RigsIn(World))
             {
                 const ULoomaLivePoseAnimInstance* Instance = Cast<ULoomaLivePoseAnimInstance>(Component->GetAnimInstance());
-                UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("  character %s: %s"), *GetNameSafe(Component->GetOwner()),
-                       !Instance ? TEXT("not following")
-                       : Instance->IsFollowingScene() ? TEXT("follows the pose another client sends")
-                       : *FString::Printf(TEXT("follows %s"), *Instance->SubjectName.ToString()));
+                FString Following = TEXT("not following");
+                if (Instance && Instance->IsFollowingScene())
+                {
+                    Following = TEXT("follows the pose another client sends");
+                    // How far behind it is shown, and how unevenly its poses arrive (HAM-325).
+                    const ALoomaSyncedActor* Actor = Cast<ALoomaSyncedActor>(Component->GetOwner());
+                    const UGameInstance* GameInstance = World->GetGameInstance();
+                    const ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
+                    double Delay = 0.0, Jitter = 0.0;
+                    if (Actor && Sync && Sync->GetLivePoseTiming(Actor->Id, Delay, Jitter))
+                    {
+                        Following += FString::Printf(TEXT(", shown %.0f ms behind (arrivals stray %.0f ms)"), Delay * 1000.0, Jitter * 1000.0);
+                    }
+                }
+                else if (Instance)
+                {
+                    Following = FString::Printf(TEXT("follows %s"), *Instance->SubjectName.ToString());
+                }
+                UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("  character %s: %s"), *GetNameSafe(Component->GetOwner()), *Following);
             }
         }));
 }
