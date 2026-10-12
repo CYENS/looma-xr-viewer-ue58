@@ -3,21 +3,8 @@
 #include "CoreMinimal.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimInstanceProxy.h"
+#include "LoomaLiveRetarget.h"
 #include "LoomaLivePoseAnimInstance.generated.h"
-
-/** A 3x3 in the column-vector convention, kept apart from FMatrix's row vectors. */
-struct FLoomaBasis
-{
-    double M[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-
-    static FLoomaBasis FromColumns(const FVector& X, const FVector& Y, const FVector& Z);
-    static FLoomaBasis FromQuat(const FQuat& Q);
-    FLoomaBasis operator*(const FLoomaBasis& Other) const;
-    FLoomaBasis Transposed() const;
-    FVector Apply(const FVector& V) const;
-    /** Only meaningful for a rotation. */
-    FQuat ToQuat() const;
-};
 
 /** Hands the game thread's pose to the worker thread that evaluates it. */
 USTRUCT()
@@ -69,10 +56,12 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
  * from the mocap system's zero, which is often off: the Moverse simulator's
  * three performers stand 1, 3 and 6 cm into their floor, and a character given
  * those heights sinks by as much. The floor is found from the feet themselves
- * (UpdateFloor). Looma.LiveLink.FindFloor 0 turns that off, to compare.
+ * (FLoomaLiveRetarget). Looma.LiveLink.FindFloor 0 turns that off, to compare.
  *
  * The Moverse maths was checked outside Unreal first, by posing a generated rig
- * with the simulator's recorded frames in Python.
+ * with the simulator's recorded frames in Python. The source half, a Live Link
+ * frame to a wire pose, is FLoomaLiveRetarget, apart from this class so that
+ * Tests/LoomaLiveRetargetTests.cpp can run it with no mesh.
  *
  * It also plays back a pose ANOTHER client published (FollowScene): the same
  * wire frame this class sends, read from the scene sync and written into this
@@ -146,35 +135,11 @@ private:
 
     // --- The source skeleton, mapped when its bone names first arrive ---------
     TArray<FName> SourceNames;
-    TArray<int32> SourceBones;        // Live Link bone index for each row of the table
     bool bSourceReady = false;
-    FLoomaBasis CharacterInSource;    // A_s, from the profile
-    FLoomaBasis WorldToCharacter;     // C_w^-1, from the profile
-    FVector SourceBoneUp = FVector(0, 0, 1);
-    /** The profile's rootRotation, inverted: put in front of a root bone's rotation to take it off. */
-    FQuat RootUndo = FQuat::Identity;
+    FLoomaLiveRetarget Retarget;
     /** The source the profile was chosen for. The same subject name can move to another source. */
     FString SourceType;
     float SinceSourceCheck = 0.0f;
-    /** Scratch for a frame: each source bone in the source's world. */
-    TArray<FTransform> SourceWorld;
-    TArray<bool> SourceDone;
-    bool bHasOrigin = false;
-    FVector Origin = FVector::ZeroVector;
-
-    /**
-     * The height of the floor under the performer, in the source's units along
-     * the character's up, from `Support`: the lowest point a foot rests on this
-     * frame. A low percentile of the last few seconds, so a step, a jump and the
-     * dip of a toe pushing off do not move it, and eased so a sample leaving the
-     * window is not a jolt.
-     */
-    double UpdateFloor(double Support, float DeltaSeconds);
-    TArray<double> FloorSamples;
-    int32 FloorNext = 0;
-    float SinceFloorSample = 0.0f;
-    double FloorLevel = 0.0;
-    bool bHasFloor = false;
 
     // --- This frame, for the proxy -----------------------------------------------
     TArray<FQuat> Rotations;
