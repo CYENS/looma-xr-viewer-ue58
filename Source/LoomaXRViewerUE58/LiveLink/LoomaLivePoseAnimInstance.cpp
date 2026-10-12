@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "Features/IModularFeatures.h"
 #include "ILiveLinkClient.h"
+#include "LoomaLiveLinkProfiles.h"
 #include "LoomaSceneSyncSubsystem.h"
 #include "LoomaSyncedActor.h"
 #include "ReferenceSkeleton.h"
@@ -17,41 +18,40 @@ DEFINE_LOG_CATEGORY_STATIC(LogLoomaLivePose, Log, All);
 
 namespace
 {
-    /** A Moverse bone (after `moverserig_`) and the rig bone (after `mixamorig:`) it drives. */
-    struct FBonePair
+    /** A body bone of the rig (after `mixamorig:`) and the row of its parent, -1 for the hips. */
+    struct FRigBone
     {
-        const TCHAR* Source;
         const TCHAR* Target;
+        int32 Parent;
     };
 
-    // Row 0 is the pelvis. SMPL has three spine joints and so has the rig; its
-    // "collar" is the rig's shoulder and its "shoulder" the rig's arm.
-    //
-    // The rows are in the rig format's BODY order, the 52 bones with the fingers
-    // left out, because that is the order the wire's `pose` carries them in.
-    const FBonePair BoneTable[] = {
-        {TEXT("Pelvis"), TEXT("Hips")},
-        {TEXT("Spine1"), TEXT("Spine")},
-        {TEXT("Spine2"), TEXT("Spine1")},
-        {TEXT("Spine3"), TEXT("Spine2")},
-        {TEXT("Neck"), TEXT("Neck")},
-        {TEXT("Head"), TEXT("Head")},
-        {TEXT("LeftCollar"), TEXT("LeftShoulder")},
-        {TEXT("LeftShoulder"), TEXT("LeftArm")},
-        {TEXT("LeftElbow"), TEXT("LeftForeArm")},
-        {TEXT("LeftWrist"), TEXT("LeftHand")},
-        {TEXT("RightCollar"), TEXT("RightShoulder")},
-        {TEXT("RightShoulder"), TEXT("RightArm")},
-        {TEXT("RightElbow"), TEXT("RightForeArm")},
-        {TEXT("RightWrist"), TEXT("RightHand")},
-        {TEXT("LeftHip"), TEXT("LeftUpLeg")},
-        {TEXT("LeftKnee"), TEXT("LeftLeg")},
-        {TEXT("LeftAnkle"), TEXT("LeftFoot")},
-        {TEXT("LeftFoot"), TEXT("LeftToeBase")},
-        {TEXT("RightHip"), TEXT("RightUpLeg")},
-        {TEXT("RightKnee"), TEXT("RightLeg")},
-        {TEXT("RightAnkle"), TEXT("RightFoot")},
-        {TEXT("RightFoot"), TEXT("RightToeBase")},
+    // The rig format's BODY order, the 52 bones with the fingers left out: it is
+    // the order the wire's `pose` carries them in, and parents come before
+    // children. Which Live Link bone drives each is a profile's business
+    // (Config/LiveLinkProfiles.json), not this table's.
+    const FRigBone BoneTable[] = {
+        {TEXT("Hips"), -1},
+        {TEXT("Spine"), 0},
+        {TEXT("Spine1"), 1},
+        {TEXT("Spine2"), 2},
+        {TEXT("Neck"), 3},
+        {TEXT("Head"), 4},
+        {TEXT("LeftShoulder"), 3},
+        {TEXT("LeftArm"), 6},
+        {TEXT("LeftForeArm"), 7},
+        {TEXT("LeftHand"), 8},
+        {TEXT("RightShoulder"), 3},
+        {TEXT("RightArm"), 10},
+        {TEXT("RightForeArm"), 11},
+        {TEXT("RightHand"), 12},
+        {TEXT("LeftUpLeg"), 0},
+        {TEXT("LeftLeg"), 14},
+        {TEXT("LeftFoot"), 15},
+        {TEXT("LeftToeBase"), 16},
+        {TEXT("RightUpLeg"), 0},
+        {TEXT("RightLeg"), 18},
+        {TEXT("RightFoot"), 19},
+        {TEXT("RightToeBase"), 20},
     };
     const int32 TableRows = UE_ARRAY_COUNT(BoneTable);
 
@@ -67,7 +67,7 @@ namespace
         return INDEX_NONE;
     }
 
-    /** "mixamorig:Hips", "mixamorig_Hips", "moverserig_Pelvis" -> the part after the rig prefix. */
+    /** "mixamorig:Hips", "mixamorig_Hips" -> the part after the rig prefix. */
     FString Bare(const FName& Name)
     {
         FString Text = Name.ToString();
@@ -76,7 +76,7 @@ namespace
         {
             Text.RightChopInline(Cut + 1);
         }
-        for (const TCHAR* Prefix : {TEXT("mixamorig_"), TEXT("mixamorig"), TEXT("moverserig_")})
+        for (const TCHAR* Prefix : {TEXT("mixamorig_"), TEXT("mixamorig")})
         {
             if (Text.StartsWith(Prefix, ESearchCase::IgnoreCase))
             {
@@ -342,29 +342,35 @@ bool ULoomaLivePoseAnimInstance::BuildTarget()
 bool ULoomaLivePoseAnimInstance::BuildSource(const TArray<FName>& BoneNames)
 {
     SourceNames = BoneNames;
-    TMap<FString, int32> ByName;
-    for (int32 Bone = 0; Bone < BoneNames.Num(); ++Bone)
-    {
-        ByName.Add(Bare(BoneNames[Bone]), Bone);
-    }
     SourceBones.Init(INDEX_NONE, TableRows);
+    const FLoomaLiveLinkProfile* Profile = LoomaLiveLinkProfiles::For(BoneNames);
+    if (!Profile)
+    {
+        UE_LOG(LogLoomaLivePose, Warning,
+               TEXT("Live Link subject '%s' matches no profile in Config/LiveLinkProfiles.json; its first bone is '%s'."),
+               *SubjectName.ToString(), BoneNames.Num() > 0 ? *BoneNames[0].ToString() : TEXT("-"));
+        return false;
+    }
     int32 Mapped = 0;
     for (int32 Index = 0; Index < TableRows; ++Index)
     {
-        if (const int32* Found = ByName.Find(BoneTable[Index].Source))
+        if (const FName* Source = Profile->Bones.Find(BoneTable[Index].Target))
         {
-            SourceBones[Index] = *Found;
-            ++Mapped;
+            SourceBones[Index] = BoneNames.IndexOfByKey(*Source);
+            Mapped += SourceBones[Index] != INDEX_NONE ? 1 : 0;
         }
     }
-    const bool bUsable = SourceBones[0] != INDEX_NONE
-        && SourceBones[Row(TEXT("LeftUpLeg"))] != INDEX_NONE && SourceBones[Row(TEXT("RightUpLeg"))] != INDEX_NONE
-        && SourceBones[Row(TEXT("LeftLeg"))] != INDEX_NONE && SourceBones[Row(TEXT("RightLeg"))] != INDEX_NONE
-        && SourceBones[Row(TEXT("LeftFoot"))] != INDEX_NONE && SourceBones[Row(TEXT("RightFoot"))] != INDEX_NONE
-        && SourceBones[Row(TEXT("LeftToeBase"))] != INDEX_NONE && SourceBones[Row(TEXT("RightToeBase"))] != INDEX_NONE;
-    UE_LOG(LogLoomaLivePose, Log, TEXT("Live Link subject '%s': %d of %d bones mapped%s."),
-           *SubjectName.ToString(), Mapped, TableRows, bUsable ? TEXT("") : TEXT("; not a Moverse skeleton"));
-    return bUsable;
+    const FVector Left = Profile->BoneLeft.GetSafeNormal();
+    const FVector Up = Profile->BoneUp.GetSafeNormal();
+    const FVector Forward = Profile->BoneForward.GetSafeNormal();
+    CharacterInSource = FLoomaBasis::FromColumns(Left, Up, Forward);
+    SourceBoneUp = Up;
+    WorldToCharacter = FLoomaBasis::FromColumns(
+        Profile->WorldLeft.GetSafeNormal(), Profile->WorldUp.GetSafeNormal(), Profile->WorldForward.GetSafeNormal()
+    ).Transposed();
+    UE_LOG(LogLoomaLivePose, Log, TEXT("Live Link subject '%s' is a '%s' skeleton: %d of %d bones mapped."),
+           *SubjectName.ToString(), *Profile->Name, Mapped, TableRows);
+    return true;
 }
 
 void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
@@ -405,71 +411,87 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     {
         return;
     }
-    const TArray<FTransform>& T = Animation->Transforms;
-    auto Source = [this, &T](const TCHAR* Target) -> const FTransform& { return T[SourceBones[Row(Target)]]; };
+    const TArray<FTransform>& Local = Animation->Transforms;
+    const TArray<int32>& Parents = Skeleton->GetBoneParents();
 
-    // The character's axes in a source bone's own coordinates, from this frame's
-    // offsets: hip to hip, hip to knee, ankle to toe. Bone offsets do not move.
-    const FVector Left = (Source(TEXT("LeftUpLeg")).GetLocation() - Source(TEXT("RightUpLeg")).GetLocation()).GetSafeNormal();
-    const FVector Up = Orthogonal(
-        -(Source(TEXT("LeftLeg")).GetLocation() + Source(TEXT("RightLeg")).GetLocation()), Left);
-    const FVector Forward = Orthogonal(
-        Source(TEXT("LeftToeBase")).GetLocation() + Source(TEXT("RightToeBase")).GetLocation(), Left, &Up);
-    if (Left.IsNearlyZero() || Up.IsNearlyZero() || Forward.IsNearlyZero())
-    {
-        return;
-    }
-    const FLoomaBasis CharacterInSource = FLoomaBasis::FromColumns(Left, Up, Forward); // A_s
-    const FLoomaBasis SourceToCharacter = CharacterInSource.Transposed();
-    const FLoomaBasis WorldToCharacter =
-        FLoomaBasis::FromColumns(SourceLeftAxis, SourceUpAxis, SourceForwardAxis).Transposed();
-    const FLoomaBasis BoneToCharacter = CharacterInBone.Transposed();
+    // Every source bone in the source's world. A Live Link frame is parent-relative.
+    SourceWorld.SetNum(Local.Num());
+    SourceDone.Init(false, Local.Num());
+    TFunction<const FTransform&(int32, int32)> WorldOf = [&](int32 Bone, int32 Depth) -> const FTransform& {
+        if (!SourceDone[Bone])
+        {
+            const int32 Parent = Parents.IsValidIndex(Bone) ? Parents[Bone] : INDEX_NONE;
+            SourceWorld[Bone] = Local.IsValidIndex(Parent) && Depth < Local.Num()
+                ? Local[Bone] * WorldOf(Parent, Depth + 1)
+                : Local[Bone];
+            SourceDone[Bone] = true;
+        }
+        return SourceWorld[Bone];
+    };
 
-    // The pelvis in the source's world: its ancestors' transforms are applied first.
-    const int32 Pelvis = SourceBones[0];
-    FTransform PelvisWorld = T[Pelvis];
-    for (int32 Parent = Skeleton->GetBoneParents()[Pelvis]; Parent >= 0 && Parent < T.Num();
-         Parent = Skeleton->GetBoneParents()[Parent])
-    {
-        PelvisWorld = PelvisWorld * T[Parent];
-    }
-
+    // Each rig bone's turn from its T-pose, in the character's own left, up,
+    // forward and in the world: W_source written in the character's axes on both
+    // sides. In the T-pose that is the identity for every bone, which is the one
+    // thing a profile's skeleton has to have in common with the rig. A rig bone
+    // nothing drives takes its parent's, so it keeps its T-pose rotation
+    // relative to it. In world space, so a source with a bone the rig has no
+    // room for (Xsens has four spine segments, the rig three) loses nothing.
+    FLoomaBasis Turn[UE_ARRAY_COUNT(BoneTable)];
     for (int32 Index = 0; Index < TableRows; ++Index)
     {
         const int32 From = SourceBones[Index];
+        if (From != INDEX_NONE)
+        {
+            Turn[Index] = WorldToCharacter * FLoomaBasis::FromQuat(WorldOf(From, 0).GetRotation()) * CharacterInSource;
+        }
+        else if (BoneTable[Index].Parent >= 0)
+        {
+            Turn[Index] = Turn[BoneTable[Index].Parent];
+        }
+    }
+
+    const FLoomaBasis BoneToCharacter = CharacterInBone.Transposed();
+    for (int32 Index = 0; Index < TableRows; ++Index)
+    {
+        // Relative to the rig's parent bone: the wire's rotation as it stands,
+        // since the character's left, up, forward are the rig file's X, Y, Z.
+        const int32 Parent = BoneTable[Index].Parent;
+        const FLoomaBasis LocalTurn = Parent >= 0 ? Turn[Parent].Transposed() * Turn[Index] : Turn[Index];
+        WireRotations[Index] = LocalTurn.ToQuat();
+
         const int32 To = TargetBones[Index];
-        if (From == INDEX_NONE || To == INDEX_NONE)
+        if (To == INDEX_NONE)
         {
             continue;
         }
-        if (Index == 0)
+        if (Parent < 0)
         {
-            const FLoomaBasis Turn =
-                WorldToCharacter * FLoomaBasis::FromQuat(PelvisWorld.GetRotation()) * CharacterInSource;
-            const FLoomaBasis InComponent = CharacterInComponent * Turn * CharacterInComponent.Transposed() * HipsRest;
+            const FLoomaBasis InComponent = CharacterInComponent * LocalTurn * CharacterInComponent.Transposed() * HipsRest;
             Rotations[To] = (HipsParentInverse * InComponent).ToQuat();
-            WireRotations[Index] = Turn.ToQuat();
         }
         else
         {
-            const FLoomaBasis Turn = SourceToCharacter * FLoomaBasis::FromQuat(T[From].GetRotation()) * CharacterInSource;
-            Rotations[To] = (CharacterInBone * Turn * BoneToCharacter).ToQuat();
-            // `Turn` is the rotation in the character's own left, up, forward,
-            // which are the rig file's X, Y, Z: the wire's rotation as it stands.
-            WireRotations[Index] = Turn.ToQuat();
+            Rotations[To] = (CharacterInBone * LocalTurn * BoneToCharacter).ToQuat();
         }
         HasRotation[To] = true;
     }
 
-    // The hips: height by leg length, travel across the floor from the first frame.
+    // The hips: height by leg length, travel across the floor from the first
+    // frame. Leg length from the bones' own offsets, which do not move: the drop
+    // from pelvis to hip joint, thigh, shin, and the drop from ankle to toe.
+    auto Offset = [this, &Local](const TCHAR* Target) {
+        const int32 Bone = SourceBones[Row(Target)];
+        return Bone != INDEX_NONE ? Local[Bone].GetLocation() : FVector::ZeroVector;
+    };
     const double SourceLeg =
-        FMath::Abs(FVector::DotProduct(Source(TEXT("LeftUpLeg")).GetLocation(), Up))
-        + Source(TEXT("LeftLeg")).GetLocation().Size() + Source(TEXT("LeftFoot")).GetLocation().Size()
-        + FMath::Abs(FVector::DotProduct(Source(TEXT("LeftToeBase")).GetLocation(), Up));
-    if (SourceLeg > KINDA_SMALL_NUMBER)
+        FMath::Abs(FVector::DotProduct(Offset(TEXT("LeftUpLeg")), SourceBoneUp))
+        + Offset(TEXT("LeftLeg")).Size() + Offset(TEXT("LeftFoot")).Size()
+        + FMath::Abs(FVector::DotProduct(Offset(TEXT("LeftToeBase")), SourceBoneUp));
+    const int32 Pelvis = SourceBones[0];
+    if (SourceLeg > KINDA_SMALL_NUMBER && Pelvis != INDEX_NONE)
     {
         const double Scale = HipsHeight / SourceLeg;
-        const FVector InCharacter = WorldToCharacter.Apply(PelvisWorld.GetLocation());
+        const FVector InCharacter = WorldToCharacter.Apply(WorldOf(Pelvis, 0).GetLocation());
         if (!bHasOrigin)
         {
             bHasOrigin = true;

@@ -10,8 +10,10 @@ namespace LoomaLiveLink
 {
     /** The port the Moverse simulator sends to. */
     const int32 DefaultPort = 54321;
+    /** MVN's own streaming port, which Xsens's Live Link plugin would otherwise hold. */
+    const int32 DefaultMvnPort = 9763;
 
-    /** Start reading the simulator's datagrams unless something here already is. */
+    /** Start reading both simulators' datagrams, each unless something here already is. */
     bool EnsureListening(int32 Port = DefaultPort);
 
     /** The engine's Live Link client, or null when the plugin is off. */

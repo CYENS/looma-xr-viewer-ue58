@@ -1,0 +1,80 @@
+{
+  "_about": [
+    "Which mocap skeletons the viewer can put on a generated character, as data (HAM-316).",
+    "Adding a vendor is adding a profile here. No C++ changes, as long as the vendor's bones",
+    "have no rotation in its T-pose once each is written relative to its parent; both",
+    "vendors below do. Read by LoomaLiveLinkProfiles.cpp when the first character is driven.",
+    "",
+    "bones:     rig bone (the 22 body bones of LoomaMixamo-A/1) -> the Live Link bone that drives it.",
+    "           A rig bone left out keeps its T-pose rotation relative to its parent.",
+    "boneAxes:  the performer's left, up and forward in a source bone's OWN coordinates, in the T-pose.",
+    "worldAxes: the same three directions in the source's world, for a performer facing its default way.",
+    "A subject uses the first profile all of whose 'required' rig bones it has."
+  ],
+  "required": [
+    "Hips", "LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg",
+    "LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase"
+  ],
+  "profiles": [
+    {
+      "name": "moverse",
+      "about": "Moverse (SMPL, 24 joints), as code/moverse-simulation-python sends it. Bone-local: X left, Y down, Z forward. World: Unreal's, with the performer facing +Y.",
+      "boneAxes": { "left": [1, 0, 0], "up": [0, -1, 0], "forward": [0, 0, 1] },
+      "worldAxes": { "left": [1, 0, 0], "up": [0, 0, 1], "forward": [0, 1, 0] },
+      "bones": {
+        "Hips": "moverserig_Pelvis",
+        "Spine": "moverserig_Spine1",
+        "Spine1": "moverserig_Spine2",
+        "Spine2": "moverserig_Spine3",
+        "Neck": "moverserig_Neck",
+        "Head": "moverserig_Head",
+        "LeftShoulder": "moverserig_LeftCollar",
+        "LeftArm": "moverserig_LeftShoulder",
+        "LeftForeArm": "moverserig_LeftElbow",
+        "LeftHand": "moverserig_LeftWrist",
+        "RightShoulder": "moverserig_RightCollar",
+        "RightArm": "moverserig_RightShoulder",
+        "RightForeArm": "moverserig_RightElbow",
+        "RightHand": "moverserig_RightWrist",
+        "LeftUpLeg": "moverserig_LeftHip",
+        "LeftLeg": "moverserig_LeftKnee",
+        "LeftFoot": "moverserig_LeftAnkle",
+        "LeftToeBase": "moverserig_LeftFoot",
+        "RightUpLeg": "moverserig_RightHip",
+        "RightLeg": "moverserig_RightKnee",
+        "RightFoot": "moverserig_RightAnkle",
+        "RightToeBase": "moverserig_RightFoot"
+      }
+    },
+    {
+      "name": "xsens",
+      "about": "Xsens MVN (23 segments), as the MVN network protocol sends it and LoomaMvnLiveLinkSource reads it. Bone-local and world alike: X forward, Y left, Z up. Xsens has four spine segments and the rig three, so T12 drives nothing.",
+      "boneAxes": { "left": [0, 1, 0], "up": [0, 0, 1], "forward": [1, 0, 0] },
+      "worldAxes": { "left": [0, 1, 0], "up": [0, 0, 1], "forward": [1, 0, 0] },
+      "bones": {
+        "Hips": "Pelvis",
+        "Spine": "L5",
+        "Spine1": "L3",
+        "Spine2": "T8",
+        "Neck": "Neck",
+        "Head": "Head",
+        "LeftShoulder": "LeftShoulder",
+        "LeftArm": "LeftUpperArm",
+        "LeftForeArm": "LeftForeArm",
+        "LeftHand": "LeftHand",
+        "RightShoulder": "RightShoulder",
+        "RightArm": "RightUpperArm",
+        "RightForeArm": "RightForeArm",
+        "RightHand": "RightHand",
+        "LeftUpLeg": "LeftUpperLeg",
+        "LeftLeg": "LeftLowerLeg",
+        "LeftFoot": "LeftFoot",
+        "LeftToeBase": "LeftToe",
+        "RightUpLeg": "RightUpperLeg",
+        "RightLeg": "RightLowerLeg",
+        "RightFoot": "RightFoot",
+        "RightToeBase": "RightToe"
+      }
+    }
+  ]
+}
