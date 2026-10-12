@@ -19,7 +19,7 @@ All three are git submodules under `Plugins/`:
 | --- | --- | --- |
 | `Plugins/LoomaSceneSync` | [CYENS/looma-scene-sync-plugin](https://github.com/CYENS/looma-scene-sync-plugin) | `main` |
 | `Plugins/glTFRuntime` | [CYENS/glTFRuntimeLoomaXR](https://github.com/CYENS/glTFRuntimeLoomaXR) | `master` |
-| `Plugins/glTFRuntimeWebP` | [CYENS/glTFRuntimeWebPLoomaXR](https://github.com/CYENS/glTFRuntimeWebPLoomaXR) | `master` |
+| `Plugins/glTFRuntimeWebP` | [CYENS/glTFRuntimeWebPLoomaXR](https://github.com/CYENS/glTFRuntimeWebPLoomaXR) | `main` |
 
 `LoomaSceneSync` declares `glTFRuntime` in its `.uplugin` and links it as a public
 module, so it will not compile without it.
@@ -30,12 +30,53 @@ git clone --recurse-submodules git@github.com:CYENS/looma-xr-viewer-ue58.git
 git submodule update --init --recursive
 ```
 
-> [!warning] The plugin pins are 5.6-era
-> All three submodules are pinned at commits authored against UE 5.6. Opening this
-> project in 5.8 is expected to prompt for a plugin rebuild/upgrade. Any edits Unreal
-> makes land inside the submodules — and `LoomaSceneSync` is **shared with the 5.6
-> viewer and the asset demo**, so branch it before committing 5.8-specific changes
-> rather than pushing them to `main`.
+> [!note] `LoomaSceneSync` is developed here
+> This project is the one the plugin is built and tested against. The 5.6 viewer
+> ([CYENS/looma-xr-viewer](https://github.com/CYENS/looma-xr-viewer)) carries a second
+> copy of the same repository, so a change that only compiles on 5.8 goes on a branch
+> of the plugin, not straight to its `main`.
+
+## Live mocap (HAM-316)
+
+A mocap performer drives a generated, rigged character, here and in every other
+client of the scene. The code is in `Source/LoomaXRViewerUE58/LiveLink/`.
+
+- **Sources.** The viewer reads Moverse (JSON on UDP 54321) and Xsens MVN (UDP 9763)
+  itself, as Live Link subjects. Any other Live Link source works too if a profile
+  knows its skeleton.
+- **Profiles are data.** `Config/LiveLinkProfiles.json` says, for each mocap
+  skeleton, which of its bones drives which rig bone and its axes.
+  Adding a vendor is adding a profile; the file documents every field.
+- **Who is driven** is a `livelink` component on the scene node, set in the web
+  inspector or with `Looma.LiveLink.Assign`.
+
+| Console | What it does |
+| --- | --- |
+| `Looma.LiveLink.Status` | Sources, subjects, and what each character follows |
+| `Looma.LiveLink.Assign <subject> [name]` / `Unassign [name]` | Choose which character a subject drives: the selected one, or one whose name contains `name` |
+| `Looma.LiveLink.Listen` / `ListenXsens` | Start a reader by hand; both start on their own |
+| `Looma.LiveLink.FindFloor 0` | Trust the mocap system's zero height, not the performer's feet |
+
+`-LoomaNoLiveLink` on the command line starts a viewer that reads no mocap and only
+shows what other clients send: a second viewer on the same PC.
+
+**Moverse's own Unreal plugin is optional and not in this repository.** The viewer's
+reader takes the same stream. If you want Moverse's plugin as the Live Link source,
+unpack it into `Plugins/` yourself; the folder is ignored by git, and the
+`moverse-plugin` profile reads its subjects.
+
+**Tests.** The Live Link automation tests run headless, with the editor
+closed:
+
+```powershell
+$editor = 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
+& $editor "$PWD\LoomaXRViewerUE58.uproject" -ExecCmds="Automation RunTests Looma.LiveLink; Quit" -unattended -nullrhi -nosplash -nosound -stdout
+```
+
+> [!warning] The demo level submits a generation job on Play
+> `BP_LoomaGenerationComponentDemo` in `LVL_Demo` sends a text-to-3D job to the
+> backend when play begins, so every `-game` launch of this project adds one to the
+> queue. Do not start the viewer in a loop or from a script without knowing that.
 
 ## Remote selection outlines (HAM-159 / HAM-209)
 

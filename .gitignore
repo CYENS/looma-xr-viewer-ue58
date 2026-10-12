@@ -15,3 +15,7 @@ Saved/
 *.VC.db
 *.VC.opendb
 .vsconfig
+
+# Moverse's own Unreal plugin: a vendor download with no licence file, so it is
+# not ours to redistribute. Optional: see "Live mocap" in the README.
+Plugins/MoversePlugin*/
