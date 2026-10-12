@@ -119,6 +119,8 @@ private:
 
     bool BuildTarget();
     bool BuildSource(const TArray<FName>& BoneNames);
+    /** The type of the Live Link source the subject comes from, as the Live Link panel shows it. */
+    FString SubjectSourceType() const;
     void UpdateFromScene(float DeltaSeconds);
     /**
      * Pose the mesh from a frame in the wire's terms. `Alpha` is how far to move
@@ -149,6 +151,11 @@ private:
     FLoomaBasis CharacterInSource;    // A_s, from the profile
     FLoomaBasis WorldToCharacter;     // C_w^-1, from the profile
     FVector SourceBoneUp = FVector(0, 0, 1);
+    /** The profile's rootRotation, inverted: put in front of a root bone's rotation to take it off. */
+    FQuat RootUndo = FQuat::Identity;
+    /** The source the profile was chosen for. The same subject name can move to another source. */
+    FString SourceType;
+    float SinceSourceCheck = 0.0f;
     /** Scratch for a frame: each source bone in the source's world. */
     TArray<FTransform> SourceWorld;
     TArray<bool> SourceDone;

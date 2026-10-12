@@ -465,11 +465,32 @@ bool ULoomaLivePoseAnimInstance::BuildTarget()
     return true;
 }
 
+FString ULoomaLivePoseAnimInstance::SubjectSourceType() const
+{
+    IModularFeatures& Features = IModularFeatures::Get();
+    if (!Features.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
+    {
+        return FString();
+    }
+    ILiveLinkClient& Client = Features.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
+    // The enabled subject of that name: the one a frame is evaluated from.
+    for (const FLiveLinkSubjectKey& Key : Client.GetSubjects(/*bIncludeDisabledSubject=*/false, /*bIncludeVirtualSubject=*/false))
+    {
+        if (Key.SubjectName.Name == SubjectName)
+        {
+            return Client.GetSourceType(Key.Source).ToString();
+        }
+    }
+    return FString();
+}
+
 bool ULoomaLivePoseAnimInstance::BuildSource(const TArray<FName>& BoneNames)
 {
     SourceNames = BoneNames;
+    SourceType = SubjectSourceType();
     SourceBones.Init(INDEX_NONE, TableRows);
-    const FLoomaLiveLinkProfile* Profile = LoomaLiveLinkProfiles::For(BoneNames);
+    RootUndo = FQuat::Identity;
+    const FLoomaLiveLinkProfile* Profile = LoomaLiveLinkProfiles::For(BoneNames, SourceType);
     if (!Profile)
     {
         UE_LOG(LogLoomaLivePose, Warning,
@@ -491,11 +512,12 @@ bool ULoomaLivePoseAnimInstance::BuildSource(const TArray<FName>& BoneNames)
     const FVector Forward = Profile->BoneForward.GetSafeNormal();
     CharacterInSource = FLoomaBasis::FromColumns(Left, Up, Forward);
     SourceBoneUp = Up;
+    RootUndo = Profile->RootRotation.Inverse();
     WorldToCharacter = FLoomaBasis::FromColumns(
         Profile->WorldLeft.GetSafeNormal(), Profile->WorldUp.GetSafeNormal(), Profile->WorldForward.GetSafeNormal()
     ).Transposed();
-    UE_LOG(LogLoomaLivePose, Log, TEXT("Live Link subject '%s' is a '%s' skeleton: %d of %d bones mapped."),
-           *SubjectName.ToString(), *Profile->Name, Mapped, TableRows);
+    UE_LOG(LogLoomaLivePose, Log, TEXT("Live Link subject '%s' from '%s' is a '%s' skeleton: %d of %d bones mapped."),
+           *SubjectName.ToString(), *SourceType, *Profile->Name, Mapped, TableRows);
     return true;
 }
 
@@ -533,6 +555,18 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     {
         return;
     }
+    // The same subject name can pass to another source that sends the same bones
+    // another way (Moverse's own plugin and the viewer's reader both say
+    // "Actor0"), so the source is looked at again now and then.
+    SinceSourceCheck += DeltaSeconds;
+    if (bSourceReady && SinceSourceCheck >= 0.5f)
+    {
+        SinceSourceCheck = 0.0f;
+        if (SubjectSourceType() != SourceType)
+        {
+            bSourceReady = false;
+        }
+    }
     if (!bSourceReady || SourceNames != Skeleton->GetBoneNames())
     {
         bSourceReady = BuildSource(Skeleton->GetBoneNames());
@@ -552,9 +586,16 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
         if (!SourceDone[Bone])
         {
             const int32 Parent = Parents.IsValidIndex(Bone) ? Parents[Bone] : INDEX_NONE;
-            SourceWorld[Bone] = Local.IsValidIndex(Parent) && Depth < Local.Num()
-                ? Local[Bone] * WorldOf(Parent, Depth + 1)
-                : Local[Bone];
+            if (Local.IsValidIndex(Parent) && Depth < Local.Num())
+            {
+                SourceWorld[Bone] = Local[Bone] * WorldOf(Parent, Depth + 1);
+            }
+            else
+            {
+                // A root: whatever the source put in front of its rotation comes off.
+                SourceWorld[Bone] = Local[Bone];
+                SourceWorld[Bone].SetRotation((RootUndo * Local[Bone].GetRotation()).GetNormalized());
+            }
             SourceDone[Bone] = true;
         }
         return SourceWorld[Bone];
