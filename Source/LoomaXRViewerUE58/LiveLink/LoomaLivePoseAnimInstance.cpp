@@ -23,6 +23,16 @@ namespace
         TEXT("Looma.LiveLink.FindFloor"), 1,
         TEXT("1: stand a Live Link character on the floor its performer's feet rest on. 0: trust the mocap system's own zero height."));
 
+    TAutoConsoleVariable<int32> CVarSmooth(
+        TEXT("Looma.LiveLink.Smooth"), 1,
+        TEXT("1: steady a Live Link pose as its profile in Config/LiveLinkProfiles.json says. 0: use every pose as it comes."));
+    TAutoConsoleVariable<float> CVarSmoothMinCutoff(
+        TEXT("Looma.LiveLink.SmoothMinCutoff"), -1.0f,
+        TEXT("Hz. How hard a still performer is smoothed: lower is steadier and slower to follow. Negative: the profile's own."));
+    TAutoConsoleVariable<float> CVarSmoothBeta(
+        TEXT("Looma.LiveLink.SmoothBeta"), -1.0f,
+        TEXT("Hz for each radian a second a bone turns: higher follows a fast movement more closely. Negative: the profile's own."));
+
     /** "mixamorig:Hips", "mixamorig_Hips" -> the part after the rig prefix. */
     FString Bare(const FName& Name)
     {
@@ -308,6 +318,8 @@ bool ULoomaLivePoseAnimInstance::BuildSource(const TArray<FName>& BoneNames)
         return false;
     }
     const int32 Mapped = Retarget.Build(*Profile, BoneNames);
+    Smoothing = Profile->Smoothing;
+    Smoother.Reset();
     UE_LOG(LogLoomaLivePose, Log, TEXT("Live Link subject '%s' from '%s' is a '%s' skeleton: %d of %d bones mapped."),
            *SubjectName.ToString(), *SourceType, *Profile->Name, Mapped, LoomaRigBody::Num);
     return true;
@@ -369,6 +381,16 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     }
     const bool bHips = Retarget.Evaluate(Animation->Transforms, Skeleton->GetBoneParents(), DeltaSeconds,
                                          CVarFindFloor.GetValueOnGameThread() != 0, WireRotations, WireHips);
+    // Steadied before anyone sees it, this client included.
+    FLoomaSmoothing Steady = CVarSmooth.GetValueOnGameThread() != 0 ? Smoothing : FLoomaSmoothing();
+    if (CVarSmooth.GetValueOnGameThread() != 0)
+    {
+        const float MinCutoff = CVarSmoothMinCutoff.GetValueOnGameThread();
+        const float Beta = CVarSmoothBeta.GetValueOnGameThread();
+        Steady.MinCutoff = MinCutoff >= 0.0f ? MinCutoff : Steady.MinCutoff;
+        Steady.Beta = Beta >= 0.0f ? Beta : Steady.Beta;
+    }
+    Smoother.Apply(WireRotations, bHips ? &WireHips : nullptr, DeltaSeconds, Steady);
     // Posed here from the very frame the other clients are sent, by the step
     // they use, so what this client shows is what they show.
     SetFromWire(bHips ? &WireHips : nullptr, WireRotations, 1.0f);

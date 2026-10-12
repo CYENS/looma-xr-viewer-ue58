@@ -114,8 +114,18 @@ namespace
                     Profile.RootRotation = Q.GetNormalized();
                 }
             }
-            UE_LOG(LogLoomaLiveLinkProfiles, Log, TEXT("Live Link profile '%s': %d bones%s."), *Profile.Name, Profile.Bones.Num(),
-                   Profile.Source.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(", for '%s' sources"), *Profile.Source));
+            const TSharedPtr<FJsonObject>* Smoothing = nullptr;
+            if ((*Object)->TryGetObjectField(TEXT("smoothing"), Smoothing))
+            {
+                Profile.Smoothing = FLoomaSmoothing();
+                (*Smoothing)->TryGetNumberField(TEXT("minCutoff"), Profile.Smoothing.MinCutoff);
+                (*Smoothing)->TryGetNumberField(TEXT("beta"), Profile.Smoothing.Beta);
+                Profile.Smoothing.MinCutoff = FMath::Max(0.0, Profile.Smoothing.MinCutoff);
+                Profile.Smoothing.Beta = FMath::Max(0.0, Profile.Smoothing.Beta);
+            }
+            UE_LOG(LogLoomaLiveLinkProfiles, Log, TEXT("Live Link profile '%s': %d bones%s%s."), *Profile.Name, Profile.Bones.Num(),
+                   Profile.Source.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(", for '%s' sources"), *Profile.Source),
+                   Profile.Smoothing.IsOn() ? *FString::Printf(TEXT(", smoothed (%.1f Hz, beta %.1f)"), Profile.Smoothing.MinCutoff, Profile.Smoothing.Beta) : TEXT(""));
             GProfiles.Add(MoveTemp(Profile));
         }
     }

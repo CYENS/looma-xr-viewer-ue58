@@ -14,8 +14,12 @@
     "           sources that send the same bone names differently are told apart.",
     "rootRotation: optional, x y z w. A rotation the source put in front of its root bone's own, taken",
     "           off again before the pose is read.",
-    "like:      optional. The name of another profile whose bones and axes this one uses unless it",
-    "           gives its own.",
+    "like:      optional. The name of another profile whose bones, axes and smoothing this one uses",
+    "           unless it gives its own.",
+    "smoothing: optional. Steadies a source that shakes, such as a camera-based capture. minCutoff, in",
+    "           Hz, is how hard a still performer is smoothed: lower is steadier and slower to follow.",
+    "           beta, in Hz for each radian a second a bone turns, opens the filter as they move:",
+    "           higher follows a fast movement more closely. Left out, the pose is used as it comes.",
     "A subject uses the profile for its source if there is one, else the first profile without a",
     "'source', among those all of whose 'required' rig bones it has."
   ],
@@ -29,6 +33,7 @@
       "about": "Moverse (SMPL, 24 joints), as code/moverse-simulation-python sends it. Bone-local: X left, Y down, Z forward. World: Unreal's, with the performer facing +Y.",
       "boneAxes": { "left": [1, 0, 0], "up": [0, -1, 0], "forward": [0, 0, 1] },
       "worldAxes": { "left": [1, 0, 0], "up": [0, 0, 1], "forward": [0, 1, 0] },
+      "smoothing": { "minCutoff": 2.0, "beta": 1.0 },
       "bones": {
         "Hips": "moverserig_Pelvis",
         "Spine": "moverserig_Spine1",

@@ -3,6 +3,21 @@
 #include "CoreMinimal.h"
 
 /**
+ * How much a source's pose is steadied before it is used (HAM-324): a One Euro
+ * filter, which smooths hard while the performer is still and lets go as they
+ * move. Off unless `MinCutoff` is positive.
+ */
+struct FLoomaSmoothing
+{
+    /** Hz. The filter's cutoff for a still performer: lower is steadier and slower to follow. */
+    double MinCutoff = 0.0;
+    /** Hz for each radian a second a bone turns: higher follows a fast movement more closely. */
+    double Beta = 0.0;
+
+    bool IsOn() const { return MinCutoff > 0.0; }
+};
+
+/**
  * One mocap skeleton the viewer can put on a generated character, read from
  * `Config/LiveLinkProfiles.json` (HAM-316). The file says what each field
  * means; this is that file in memory.
@@ -24,6 +39,8 @@ struct FLoomaLiveLinkProfile
     FString Source;
     /** What the source put in front of its root bone's rotation, to be taken off again. */
     FQuat RootRotation = FQuat::Identity;
+    /** Off for a source that needs none. */
+    FLoomaSmoothing Smoothing;
 };
 
 namespace LoomaLiveLinkProfiles
