@@ -59,25 +59,63 @@ namespace
         {
             const TSharedPtr<FJsonObject>* Object = nullptr;
             FLoomaLiveLinkProfile Profile;
-            const TSharedPtr<FJsonObject>* Bones = nullptr;
-            if (!Value->TryGetObject(Object) || !(*Object)->TryGetStringField(TEXT("name"), Profile.Name)
-                || !(*Object)->TryGetObjectField(TEXT("bones"), Bones)
-                || !ReadAxes(*Object, TEXT("boneAxes"), Profile.BoneLeft, Profile.BoneUp, Profile.BoneForward)
-                || !ReadAxes(*Object, TEXT("worldAxes"), Profile.WorldLeft, Profile.WorldUp, Profile.WorldForward))
+            if (!Value->TryGetObject(Object) || !(*Object)->TryGetStringField(TEXT("name"), Profile.Name))
             {
-                UE_LOG(LogLoomaLiveLinkProfiles, Warning,
-                       TEXT("A profile in %s lacks a name, bones, boneAxes or worldAxes; skipped."), *Path);
+                UE_LOG(LogLoomaLiveLinkProfiles, Warning, TEXT("A profile in %s has no name; skipped."), *Path);
                 continue;
             }
-            for (const TPair<FString, TSharedPtr<FJsonValue>>& Bone : (*Bones)->Values)
+            // `like` first, so whatever this profile gives itself replaces it. The
+            // other profile has to come earlier in the file.
+            FString Like;
+            if ((*Object)->TryGetStringField(TEXT("like"), Like))
             {
-                FString Source;
-                if (Bone.Value.IsValid() && Bone.Value->TryGetString(Source) && !Source.IsEmpty())
+                const FLoomaLiveLinkProfile* Base = GProfiles.FindByPredicate(
+                    [&Like](const FLoomaLiveLinkProfile& Other) { return Other.Name == Like; });
+                if (!Base)
                 {
-                    Profile.Bones.Add(Bone.Key, FName(*Source));
+                    UE_LOG(LogLoomaLiveLinkProfiles, Warning,
+                           TEXT("Profile '%s' in %s is like '%s', which is not above it; skipped."), *Profile.Name, *Path, *Like);
+                    continue;
+                }
+                const FString Name = Profile.Name;
+                Profile = *Base;
+                Profile.Name = Name;
+                Profile.Source.Reset();
+                Profile.RootRotation = FQuat::Identity;
+            }
+            const TSharedPtr<FJsonObject>* Bones = nullptr;
+            if ((*Object)->TryGetObjectField(TEXT("bones"), Bones))
+            {
+                Profile.Bones.Reset();
+                for (const TPair<FString, TSharedPtr<FJsonValue>>& Bone : (*Bones)->Values)
+                {
+                    FString Source;
+                    if (Bone.Value.IsValid() && Bone.Value->TryGetString(Source) && !Source.IsEmpty())
+                    {
+                        Profile.Bones.Add(Bone.Key, FName(*Source));
+                    }
                 }
             }
-            UE_LOG(LogLoomaLiveLinkProfiles, Log, TEXT("Live Link profile '%s': %d bones."), *Profile.Name, Profile.Bones.Num());
+            const bool bBoneAxes = ReadAxes(*Object, TEXT("boneAxes"), Profile.BoneLeft, Profile.BoneUp, Profile.BoneForward);
+            const bool bWorldAxes = ReadAxes(*Object, TEXT("worldAxes"), Profile.WorldLeft, Profile.WorldUp, Profile.WorldForward);
+            if (Like.IsEmpty() && (!Bones || !bBoneAxes || !bWorldAxes))
+            {
+                UE_LOG(LogLoomaLiveLinkProfiles, Warning,
+                       TEXT("Profile '%s' in %s lacks bones, boneAxes or worldAxes; skipped."), *Profile.Name, *Path);
+                continue;
+            }
+            (*Object)->TryGetStringField(TEXT("source"), Profile.Source);
+            const TArray<TSharedPtr<FJsonValue>>* Turn = nullptr;
+            if ((*Object)->TryGetArrayField(TEXT("rootRotation"), Turn) && Turn->Num() == 4)
+            {
+                const FQuat Q((*Turn)[0]->AsNumber(), (*Turn)[1]->AsNumber(), (*Turn)[2]->AsNumber(), (*Turn)[3]->AsNumber());
+                if (Q.SizeSquared() > KINDA_SMALL_NUMBER)
+                {
+                    Profile.RootRotation = Q.GetNormalized();
+                }
+            }
+            UE_LOG(LogLoomaLiveLinkProfiles, Log, TEXT("Live Link profile '%s': %d bones%s."), *Profile.Name, Profile.Bones.Num(),
+                   Profile.Source.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(", for '%s' sources"), *Profile.Source));
             GProfiles.Add(MoveTemp(Profile));
         }
     }
@@ -92,8 +130,9 @@ const TArray<FLoomaLiveLinkProfile>& LoomaLiveLinkProfiles::All()
     return GProfiles;
 }
 
-const FLoomaLiveLinkProfile* LoomaLiveLinkProfiles::For(const TArray<FName>& SubjectBones)
+const FLoomaLiveLinkProfile* LoomaLiveLinkProfiles::For(const TArray<FName>& SubjectBones, const FString& SourceType)
 {
+    const FLoomaLiveLinkProfile* Any = nullptr;
     for (const FLoomaLiveLinkProfile& Profile : All())
     {
         bool bHasAll = GRequired.Num() > 0 || Profile.Bones.Num() > 0;
@@ -106,10 +145,18 @@ const FLoomaLiveLinkProfile* LoomaLiveLinkProfiles::For(const TArray<FName>& Sub
                 break;
             }
         }
-        if (bHasAll)
+        if (!bHasAll)
+        {
+            continue;
+        }
+        if (Profile.Source.IsEmpty())
+        {
+            Any = Any ? Any : &Profile;
+        }
+        else if (SourceType.Contains(Profile.Source, ESearchCase::IgnoreCase))
         {
             return &Profile;
         }
     }
-    return nullptr;
+    return Any;
 }

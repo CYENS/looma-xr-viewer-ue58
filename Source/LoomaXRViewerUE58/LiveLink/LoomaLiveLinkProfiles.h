@@ -20,6 +20,10 @@ struct FLoomaLiveLinkProfile
     FVector WorldLeft = FVector(1, 0, 0);
     FVector WorldUp = FVector(0, 0, 1);
     FVector WorldForward = FVector(0, 1, 0);
+    /** Part of a Live Link source's type; empty for any source. */
+    FString Source;
+    /** What the source put in front of its root bone's rotation, to be taken off again. */
+    FQuat RootRotation = FQuat::Identity;
 };
 
 namespace LoomaLiveLinkProfiles
@@ -27,6 +31,10 @@ namespace LoomaLiveLinkProfiles
     /** Every profile in the file, loaded once. Empty, with a logged reason, if the file is missing or malformed. */
     const TArray<FLoomaLiveLinkProfile>& All();
 
-    /** The first profile all of whose required rig bones a subject with these bones has, or null. */
-    const FLoomaLiveLinkProfile* For(const TArray<FName>& SubjectBones);
+    /**
+     * The profile for a subject with these bones from a source of this type, or
+     * null: among the profiles all of whose required rig bones it has, the one
+     * that names its source, else the first that names none.
+     */
+    const FLoomaLiveLinkProfile* For(const TArray<FName>& SubjectBones, const FString& SourceType);
 }

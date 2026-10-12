@@ -9,7 +9,15 @@
     "           A rig bone left out keeps its T-pose rotation relative to its parent.",
     "boneAxes:  the performer's left, up and forward in a source bone's OWN coordinates, in the T-pose.",
     "worldAxes: the same three directions in the source's world, for a performer facing its default way.",
-    "A subject uses the first profile all of whose 'required' rig bones it has."
+    "source:    optional. Part of a Live Link source's type, as the Live Link panel shows it. A profile",
+    "           with one is only for subjects of such a source, and is preferred for them: it is how two",
+    "           sources that send the same bone names differently are told apart.",
+    "rootRotation: optional, x y z w. A rotation the source put in front of its root bone's own, taken",
+    "           off again before the pose is read.",
+    "like:      optional. The name of another profile whose bones and axes this one uses unless it",
+    "           gives its own.",
+    "A subject uses the profile for its source if there is one, else the first profile without a",
+    "'source', among those all of whose 'required' rig bones it has."
   ],
   "required": [
     "Hips", "LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg",
@@ -45,6 +53,13 @@
         "RightFoot": "moverserig_RightAnkle",
         "RightToeBase": "moverserig_RightFoot"
       }
+    },
+    {
+      "name": "moverse-plugin",
+      "about": "The same stream read by Moverse's own Unreal plugin (MoversePlugin) instead of the viewer's reader. The plugin turns the root bone a quarter turn about X before pushing it (rot90 * BoneQuat in MoversePluginSource.cpp) and leaves its translation alone, so a character read with the 'moverse' profile lies on its back. Taking the quarter turn off again gives exactly the 'moverse' stream.",
+      "like": "moverse",
+      "source": "Moverse Plugin",
+      "rootRotation": [0.7071068, 0, 0, 0.7071068]
     },
     {
       "name": "xsens",
