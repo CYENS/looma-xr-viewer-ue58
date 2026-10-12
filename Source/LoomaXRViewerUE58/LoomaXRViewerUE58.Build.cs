@@ -13,6 +13,12 @@ public class LoomaXRViewerUE58 : ModuleRules
 		// The Live Link proof (HAM-316): a JSON-over-UDP source and a pose applier, in LiveLink/.
 		PrivateDependencyModuleNames.AddRange(new string[] { "LiveLinkInterface", "Sockets", "Networking", "Json", "LoomaSceneSync" });
 
+		// Looma.LiveLink.Assign reads the editor's selection, so a character can be picked in the outliner.
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.Add("UnrealEd");
+		}
+
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
 		
