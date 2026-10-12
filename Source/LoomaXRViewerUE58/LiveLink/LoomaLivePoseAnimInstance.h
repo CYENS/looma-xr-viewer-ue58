@@ -65,6 +65,12 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
  * character's own. The hips' height is scaled by leg length; their travel
  * across the floor is scaled the same and measured from the first frame.
  *
+ * The hips' height is measured from the floor the performer's FEET rest on, not
+ * from the mocap system's zero, which is often off: the Moverse simulator's
+ * three performers stand 1, 3 and 6 cm into their floor, and a character given
+ * those heights sinks by as much. The floor is found from the feet themselves
+ * (UpdateFloor). Looma.LiveLink.FindFloor 0 turns that off, to compare.
+ *
  * The Moverse maths was checked outside Unreal first, by posing a generated rig
  * with the simulator's recorded frames in Python.
  *
@@ -134,7 +140,7 @@ private:
     FLoomaBasis CharacterInBone;      // A_t
     FLoomaBasis HipsRest;             // the hips' T-pose rotation in component space
     FLoomaBasis HipsParentInverse;
-    double HipsHeight = 0.0;          // component units
+    double HipsHeight = 0.0;          // the hips above the floor in the reference pose, component units
 
     // --- The source skeleton, mapped when its bone names first arrive ---------
     TArray<FName> SourceNames;
@@ -148,6 +154,20 @@ private:
     TArray<bool> SourceDone;
     bool bHasOrigin = false;
     FVector Origin = FVector::ZeroVector;
+
+    /**
+     * The height of the floor under the performer, in the source's units along
+     * the character's up, from `Support`: the lowest point a foot rests on this
+     * frame. A low percentile of the last few seconds, so a step, a jump and the
+     * dip of a toe pushing off do not move it, and eased so a sample leaving the
+     * window is not a jolt.
+     */
+    double UpdateFloor(double Support, float DeltaSeconds);
+    TArray<double> FloorSamples;
+    int32 FloorNext = 0;
+    float SinceFloorSample = 0.0f;
+    double FloorLevel = 0.0;
+    bool bHasFloor = false;
 
     // --- This frame, for the proxy -----------------------------------------------
     TArray<FQuat> Rotations;

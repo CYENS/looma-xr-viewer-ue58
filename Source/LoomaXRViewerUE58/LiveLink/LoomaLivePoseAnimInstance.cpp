@@ -6,6 +6,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "Features/IModularFeatures.h"
+#include "HAL/IConsoleManager.h"
 #include "ILiveLinkClient.h"
 #include "LoomaLiveLinkProfiles.h"
 #include "LoomaSceneSyncSubsystem.h"
@@ -18,6 +19,20 @@ DEFINE_LOG_CATEGORY_STATIC(LogLoomaLivePose, Log, All);
 
 namespace
 {
+    TAutoConsoleVariable<int32> CVarFindFloor(
+        TEXT("Looma.LiveLink.FindFloor"), 1,
+        TEXT("1: stand a Live Link character on the floor its performer's feet rest on. 0: trust the mocap system's own zero height."));
+
+    // The floor is a low percentile of where the feet rested over a window. Chosen
+    // by measuring, on generated characters with the Moverse simulator's three
+    // performers, how close the lowest vertex then stays to the floor and how much
+    // the floor estimate itself wanders: 5 s and the 35th percentile kept the sole
+    // within about a centimetre on average with the least wander.
+    const float FloorSampleSeconds = 0.05f;
+    const int32 FloorWindowSamples = 100;
+    const double FloorPercentile = 0.35;
+    const double FloorEaseSeconds = 0.25;
+
     /** A body bone of the rig (after `mixamorig:`) and the row of its parent, -1 for the hips. */
     struct FRigBone
     {
@@ -302,6 +317,39 @@ void ULoomaLivePoseAnimInstance::SetFromWire(const FVector* Hips, const TArray<F
     bHasPose = true;
 }
 
+double ULoomaLivePoseAnimInstance::UpdateFloor(double Support, float DeltaSeconds)
+{
+    if (!bHasFloor)
+    {
+        // The first frame is all there is to go on; a performer who starts in
+        // the air is put right within the window.
+        bHasFloor = true;
+        FloorSamples.Reset();
+        FloorNext = 0;
+        SinceFloorSample = FloorSampleSeconds;
+        FloorLevel = Support;
+    }
+    SinceFloorSample += DeltaSeconds;
+    if (SinceFloorSample >= FloorSampleSeconds)
+    {
+        SinceFloorSample = 0.0f;
+        if (FloorSamples.Num() < FloorWindowSamples)
+        {
+            FloorSamples.Add(Support);
+        }
+        else
+        {
+            FloorSamples[FloorNext] = Support;
+            FloorNext = (FloorNext + 1) % FloorWindowSamples;
+        }
+    }
+    TArray<double> Sorted = FloorSamples;
+    Sorted.Sort();
+    const double Raw = Sorted[FMath::FloorToInt32(FloorPercentile * (Sorted.Num() - 1))];
+    FloorLevel += (Raw - FloorLevel) * (1.0 - FMath::Exp(-double(DeltaSeconds) / FloorEaseSeconds));
+    return FloorLevel;
+}
+
 void ULoomaLivePoseAnimInstance::UpdateFromScene(float DeltaSeconds)
 {
     const USkeletalMeshComponent* Component = GetSkelMeshComponent();
@@ -391,8 +439,17 @@ bool ULoomaLivePoseAnimInstance::BuildTarget()
     HipsParentInverse = HipsParent >= 0
         ? FLoomaBasis::FromQuat(World[HipsParent].GetRotation()).Transposed()
         : FLoomaBasis();
-    HipsHeight = FVector::DotProduct(At(TEXT("Hips")), Up)
-        - FMath::Min(FVector::DotProduct(At(TEXT("LeftToeBase")), Up), FVector::DotProduct(At(TEXT("RightToeBase")), Up));
+    // Above the floor, which the rig format puts at the mesh's origin ("feet at
+    // y = 0"): the `hips_height` the wire's hips are in units of, and what the
+    // web multiplies by. Not above the toe joints, which sit a centimetre or two
+    // over the floor and would leave this client's character that much lower
+    // than everybody else's.
+    HipsHeight = FVector::DotProduct(At(TEXT("Hips")), Up);
+    if (HipsHeight <= KINDA_SMALL_NUMBER)
+    {
+        UE_LOG(LogLoomaLivePose, Warning, TEXT("%s: the hips are not above the mesh's origin."), *Mesh->GetName());
+        return false;
+    }
 
     Rotations.Init(FQuat::Identity, BoneCount);
     HasRotation.Init(false, BoneCount);
@@ -401,7 +458,7 @@ bool ULoomaLivePoseAnimInstance::BuildTarget()
 
     const int32 Spine = TargetBones[Row(TEXT("Spine"))];
     UE_LOG(LogLoomaLivePose, Log,
-           TEXT("%s: %d bones, hips %.1f above the toes; left %s up %s forward %s; hips rest %s, spine rest %s."),
+           TEXT("%s: %d bones, hips %.1f above the floor; left %s up %s forward %s; hips rest %s, spine rest %s."),
            *Mesh->GetName(), BoneCount, HipsHeight, *Left.ToCompactString(), *Up.ToCompactString(),
            *Forward.ToCompactString(), *World[HipsBone].GetRotation().Rotator().ToCompactString(),
            Spine != INDEX_NONE ? *Local[Spine].GetRotation().Rotator().ToCompactString() : TEXT("-"));
@@ -552,8 +609,22 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
         {
             bHasOrigin = true;
             Origin = FVector(InCharacter.X, 0.0, InCharacter.Z);
+            bHasFloor = false;
         }
-        WireHips = (InCharacter - Origin) / SourceLeg;
+        // The lowest point a foot rests on: a toe joint, or an ankle less the
+        // height it rests at over the toe. `SourceLeg` ends at the toe joint too,
+        // so standing straight on that floor is a height of exactly one.
+        auto Rests = [&](const TCHAR* Target, double Less) {
+            const int32 Bone = SourceBones[Row(Target)];
+            return Bone != INDEX_NONE ? WorldToCharacter.Apply(WorldOf(Bone, 0).GetLocation()).Y - Less : TNumericLimits<double>::Max();
+        };
+        const double AnkleRest = FMath::Abs(FVector::DotProduct(Offset(TEXT("LeftToeBase")), SourceBoneUp));
+        const double Support = FMath::Min(
+            FMath::Min(Rests(TEXT("LeftToeBase"), 0.0), Rests(TEXT("RightToeBase"), 0.0)),
+            FMath::Min(Rests(TEXT("LeftFoot"), AnkleRest), Rests(TEXT("RightFoot"), AnkleRest)));
+        const bool bFindFloor = CVarFindFloor.GetValueOnGameThread() != 0 && Support < TNumericLimits<double>::Max();
+        const double Floor = bFindFloor ? UpdateFloor(Support, DeltaSeconds) : 0.0;
+        WireHips = (InCharacter - Origin - FVector(0.0, Floor, 0.0)) / SourceLeg;
     }
     // Posed here from the very frame the other clients are sent, by the step
     // they use, so what this client shows is what they show.
