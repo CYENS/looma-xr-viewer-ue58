@@ -33,6 +33,10 @@ namespace
         TEXT("Looma.LiveLink.SmoothBeta"), -1.0f,
         TEXT("Hz for each radian a second a bone turns: higher follows a fast movement more closely. Negative: the profile's own."));
 
+    TAutoConsoleVariable<int32> CVarBuffer(
+        TEXT("Looma.LiveLink.Buffer"), 1,
+        TEXT("1: show a character another client drives a little in the past, between two received poses, so uneven arrival does not show. 0: chase the newest pose."));
+
     /** "mixamorig:Hips", "mixamorig_Hips" -> the part after the rig prefix. */
     FString Bare(const FName& Name)
     {
@@ -178,15 +182,26 @@ void ULoomaLivePoseAnimInstance::UpdateFromScene(float DeltaSeconds)
     const UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
     const ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
     FLoomaLivePose Pose;
+    if (CVarBuffer.GetValueOnGameThread() != 0)
+    {
+        // Where the character was a moment ago, between two received poses
+        // (FLoomaLivePoseBuffer): poses arrive unevenly, and a character that
+        // chases the newest speeds up and slows down with them.
+        if (Actor && Sync && Sync->SampleLivePose(Actor->Id, Pose))
+        {
+            bSceneStarted = true;
+            SetFromWire(&Pose.Hips, Pose.Rotations, 1.0f);
+        }
+        return; // else hold the last pose; the driver lets go of a character whose frames stopped
+    }
     if (!Actor || !Sync || !Sync->GetLivePose(Actor->Id, Pose))
     {
-        return; // hold the last pose; the driver lets go of a character whose frames stopped
+        return;
     }
-    // Close on the newest frame at a speed that suits how often frames come, as
-    // the web does (livePose.js): about three arrivals' worth a second, so one
-    // character at 30 a second is crisp and a crowd sharing the budget, a few a
-    // second each, glides between poses instead of jumping. The first frame is
-    // taken whole, so the character does not swing in from its rest pose.
+    // The older way: close on the newest frame at a speed that suits how often
+    // frames come, as the web does (livePose.js): about three arrivals' worth a
+    // second. The first frame is taken whole, so the character does not swing in
+    // from its rest pose.
     const double Rate = Pose.Gap > 0.0 ? FMath::Clamp(3.0 / Pose.Gap, 5.0, 25.0) : 25.0;
     const float Alpha = bSceneStarted && DeltaSeconds > 0.0f ? float(1.0 - FMath::Exp(-Rate * DeltaSeconds)) : 1.0f;
     bSceneStarted = true;
