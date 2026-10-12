@@ -40,30 +40,33 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
 };
 
 /**
- * Poses a LoomaMixamo-A/1 character from a Live Link subject (HAM-316's local proof).
+ * Poses a LoomaMixamo-A/1 character from a Live Link subject (HAM-316).
  *
  * No IK Retargeter and no assets: the rig format makes it arithmetic. Every
  * generated rig has the same 52 bones, and in its T-pose every bone's local
- * rotation is identity (`docs/rig-format.md` in looma-xr-asset-demo). The
- * Moverse stream is an SMPL skeleton whose bones are identity in its T-pose
- * too. So a source bone's rotation relative to its parent IS the target
- * bone's, once it is written in the target's axes:
+ * rotation is identity (`docs/rig-format.md` in looma-xr-asset-demo). A mocap
+ * skeleton whose bones are identity in ITS T-pose, relative to their parents,
+ * is then the same pose in other axes. For each bone, in world space:
  *
- *     target_local = A_t * (A_s^-1 * source_local * A_s) * A_t^-1
+ *     turn = C_w^-1 * W_source * A_s
  *
- * `A_s` is the character's (left, up, forward) in a source bone's own
- * coordinates and `A_t` the same in a target bone's. Both are measured from
- * the skeletons, left hip to right hip, hips to head, heel to toe, so neither
- * side's handedness or up-axis is written down here. The pelvis is the one
- * bone whose parent is the world, and the source's world is `Source*Axis`.
+ * `W_source` is the source bone's world rotation, `A_s` the performer's (left,
+ * up, forward) in a source bone's own coordinates and `C_w` the same in the
+ * source's world. `turn` is how far the bone has turned from its T-pose, in the
+ * performer's own left, up, forward: the identity in the T-pose, whatever the
+ * vendor. The rig bone takes the same turn, written in the rig's axes, which
+ * are measured from its reference pose (hip to hip, hips to head, heel to toe).
+ *
+ * Which Live Link bone drives which rig bone, and the two sets of axes, are a
+ * PROFILE: data, in `Config/LiveLinkProfiles.json`. Adding a vendor is adding a
+ * profile. Moverse (SMPL) and Xsens are there.
  *
  * Rotations only, as the rig format intends: bone lengths stay the generated
  * character's own. The hips' height is scaled by leg length; their travel
  * across the floor is scaled the same and measured from the first frame.
  *
- * Checked outside Unreal first, by posing a generated rig with the
- * simulator's recorded frames in Python: feet on the floor, walking, turning
- * and bending as the recording does.
+ * The Moverse maths was checked outside Unreal first, by posing a generated rig
+ * with the simulator's recorded frames in Python.
  */
 UCLASS(Transient, NotBlueprintable)
 class LOOMAXRVIEWERUE58_API ULoomaLivePoseAnimInstance : public UAnimInstance
@@ -74,11 +77,6 @@ public:
     /** The Live Link subject to follow, e.g. "Actor0". */
     UPROPERTY(EditAnywhere, Category = "Looma Live Link")
     FName SubjectName = TEXT("Actor0");
-
-    /** The source's world: which way a performer's left, up and forward point. Moverse's. */
-    FVector SourceLeftAxis = FVector(1, 0, 0);
-    FVector SourceUpAxis = FVector(0, 0, 1);
-    FVector SourceForwardAxis = FVector(0, 1, 0);
 
     /**
      * Send the pose on to the other clients, through the scene socket
@@ -119,6 +117,12 @@ private:
     TArray<FName> SourceNames;
     TArray<int32> SourceBones;        // Live Link bone index for each row of the table
     bool bSourceReady = false;
+    FLoomaBasis CharacterInSource;    // A_s, from the profile
+    FLoomaBasis WorldToCharacter;     // C_w^-1, from the profile
+    FVector SourceBoneUp = FVector(0, 0, 1);
+    /** Scratch for a frame: each source bone in the source's world. */
+    TArray<FTransform> SourceWorld;
+    TArray<bool> SourceDone;
     bool bHasOrigin = false;
     FVector Origin = FVector::ZeroVector;
 

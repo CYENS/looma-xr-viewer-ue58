@@ -27,6 +27,7 @@
 #include "LoomaJsonLiveLinkSource.h"
 #include "LoomaLiveLink.h"
 #include "LoomaLivePoseAnimInstance.h"
+#include "LoomaMvnLiveLinkSource.h"
 #include "UObject/UObjectIterator.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogLoomaLiveLinkCommands, Log, All);
@@ -34,6 +35,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogLoomaLiveLinkCommands, Log, All);
 namespace
 {
     TSharedPtr<FLoomaJsonLiveLinkSource> GSource;
+    TSharedPtr<FLoomaMvnLiveLinkSource> GMvnSource;
 
     ILiveLinkClient* LiveLinkClient()
     {
@@ -104,6 +106,36 @@ namespace
         UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Listening for the Moverse simulator on UDP %d."), Port);
         return true;
     }
+
+    bool ListenMvn(int32 Port)
+    {
+        ILiveLinkClient* Client = LiveLinkClient();
+        if (!Client)
+        {
+            return false;
+        }
+        if (GMvnSource.IsValid())
+        {
+            Client->RemoveSource(GMvnSource);
+            GMvnSource.Reset();
+        }
+        TSharedPtr<FLoomaMvnLiveLinkSource> Source = MakeShared<FLoomaMvnLiveLinkSource>(Port);
+        if (!Source->IsListening())
+        {
+            return false; // the source said why
+        }
+        GMvnSource = Source;
+        Client->AddSource(Source);
+        UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Listening for Xsens MVN on UDP %d."), Port);
+        return true;
+    }
+
+    FAutoConsoleCommandWithWorldAndArgs GListenMvn(
+        TEXT("Looma.LiveLink.ListenXsens"),
+        TEXT("Read Xsens MVN network-protocol datagrams: Looma.LiveLink.ListenXsens [port=9763]."),
+        FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>& Args, UWorld*) {
+            ListenMvn(Args.Num() > 0 ? FCString::Atoi(*Args[0]) : LoomaLiveLink::DefaultMvnPort);
+        }));
 
     FAutoConsoleCommandWithWorldAndArgs GListen(
         TEXT("Looma.LiveLink.Listen"),
@@ -185,10 +217,15 @@ namespace
         FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>&, UWorld* World) {
             if (GSource.IsValid())
             {
-                UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Listening on UDP %d: %s."), GSource->GetPort(),
+                UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Moverse: listening on UDP %d, %s."), GSource->GetPort(),
                        *GSource->GetSourceStatus().ToString());
             }
-            else
+            if (GMvnSource.IsValid())
+            {
+                UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Xsens: listening on UDP %d, %s."), GMvnSource->GetPort(),
+                       *GMvnSource->GetSourceStatus().ToString());
+            }
+            if (!GSource.IsValid() && !GMvnSource.IsValid())
             {
                 UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("Not listening."));
             }
@@ -212,7 +249,10 @@ namespace
 
 bool LoomaLiveLink::EnsureListening(int32 Port)
 {
-    return (GSource.IsValid() && GSource->IsListening()) || Listen(Port);
+    // Each on its own: one port being taken is no reason not to open the other.
+    const bool bMoverse = (GSource.IsValid() && GSource->IsListening()) || Listen(Port);
+    const bool bXsens = (GMvnSource.IsValid() && GMvnSource->IsListening()) || ListenMvn(DefaultMvnPort);
+    return bMoverse || bXsens;
 }
 
 ILiveLinkClient* LoomaLiveLink::Client()
