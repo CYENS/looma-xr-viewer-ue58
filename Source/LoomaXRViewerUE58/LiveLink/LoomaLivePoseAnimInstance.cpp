@@ -253,6 +253,75 @@ void ULoomaLivePoseAnimInstance::NativeInitializeAnimation()
     bSourceReady = false;
     bHasOrigin = false;
     bHasPose = false;
+    bSceneStarted = false;
+}
+
+void ULoomaLivePoseAnimInstance::FollowScene(bool bFollow)
+{
+    if (bFromScene != bFollow)
+    {
+        bFromScene = bFollow;
+        bSceneStarted = false;
+        bHasOrigin = false;
+    }
+}
+
+void ULoomaLivePoseAnimInstance::SetFromWire(const FVector* Hips, const TArray<FQuat>& Wire, float Alpha)
+{
+    const FLoomaBasis BoneToCharacter = CharacterInBone.Transposed();
+    for (int32 Index = 0; Index < TableRows && Index < Wire.Num(); ++Index)
+    {
+        const int32 To = TargetBones[Index];
+        FQuat Sent = Wire[Index];
+        if (To == INDEX_NONE || Sent.SizeSquared() < 1e-12)
+        {
+            continue;
+        }
+        Sent.Normalize();
+        // The wire's rotation is the bone's turn from its T-pose in the
+        // character's left, up, forward; here it is written in this mesh's bone.
+        const FLoomaBasis LocalTurn = FLoomaBasis::FromQuat(Sent);
+        FQuat Target;
+        if (BoneTable[Index].Parent < 0)
+        {
+            const FLoomaBasis InComponent = CharacterInComponent * LocalTurn * CharacterInComponent.Transposed() * HipsRest;
+            Target = (HipsParentInverse * InComponent).ToQuat();
+        }
+        else
+        {
+            Target = (CharacterInBone * LocalTurn * BoneToCharacter).ToQuat();
+        }
+        Rotations[To] = Alpha >= 1.0f || !HasRotation[To] ? Target : FQuat::Slerp(Rotations[To], Target, Alpha);
+        HasRotation[To] = true;
+    }
+    if (Hips)
+    {
+        const FVector Target = HipsParentInverse.Apply(CharacterInComponent.Apply(*Hips * HipsHeight));
+        HipsLocation = Alpha >= 1.0f ? Target : FMath::Lerp(HipsLocation, Target, Alpha);
+    }
+    bHasPose = true;
+}
+
+void ULoomaLivePoseAnimInstance::UpdateFromScene(float DeltaSeconds)
+{
+    const USkeletalMeshComponent* Component = GetSkelMeshComponent();
+    const ALoomaSyncedActor* Actor = Component ? Cast<ALoomaSyncedActor>(Component->GetOwner()) : nullptr;
+    const UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+    const ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
+    FLoomaLivePose Pose;
+    if (!Actor || !Sync || !Sync->GetLivePose(Actor->Id, Pose))
+    {
+        return; // hold the last pose; the driver lets go of a character whose frames stopped
+    }
+    // Close on the newest frame at a speed that suits how often frames come, as
+    // the web does (livePose.js): about three arrivals' worth a second, so one
+    // character at 30 a second is crisp and a crowd sharing the budget, a few a
+    // second each, glides between poses instead of jumping. The first frame is
+    // taken whole, so the character does not swing in from its rest pose.
+    const double Rate = Pose.Gap > 0.0 ? FMath::Clamp(3.0 / Pose.Gap, 5.0, 25.0) : 25.0;
+    const float Alpha = bSceneStarted && DeltaSeconds > 0.0f ? float(1.0 - FMath::Exp(-Rate * DeltaSeconds)) : 1.0f;
+    bSceneStarted = true;
+    SetFromWire(&Pose.Hips, Pose.Rotations, Alpha);
 }
 
 bool ULoomaLivePoseAnimInstance::BuildTarget()
@@ -380,6 +449,11 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
     {
         return;
     }
+    if (bFromScene)
+    {
+        UpdateFromScene(DeltaSeconds);
+        return;
+    }
     IModularFeatures& Features = IModularFeatures::Get();
     if (!Features.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
     {
@@ -450,30 +524,12 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
         }
     }
 
-    const FLoomaBasis BoneToCharacter = CharacterInBone.Transposed();
+    // Relative to the rig's parent bone: the wire's rotation as it stands, since
+    // the character's left, up, forward are the rig file's X, Y, Z.
     for (int32 Index = 0; Index < TableRows; ++Index)
     {
-        // Relative to the rig's parent bone: the wire's rotation as it stands,
-        // since the character's left, up, forward are the rig file's X, Y, Z.
         const int32 Parent = BoneTable[Index].Parent;
-        const FLoomaBasis LocalTurn = Parent >= 0 ? Turn[Parent].Transposed() * Turn[Index] : Turn[Index];
-        WireRotations[Index] = LocalTurn.ToQuat();
-
-        const int32 To = TargetBones[Index];
-        if (To == INDEX_NONE)
-        {
-            continue;
-        }
-        if (Parent < 0)
-        {
-            const FLoomaBasis InComponent = CharacterInComponent * LocalTurn * CharacterInComponent.Transposed() * HipsRest;
-            Rotations[To] = (HipsParentInverse * InComponent).ToQuat();
-        }
-        else
-        {
-            Rotations[To] = (CharacterInBone * LocalTurn * BoneToCharacter).ToQuat();
-        }
-        HasRotation[To] = true;
+        WireRotations[Index] = (Parent >= 0 ? Turn[Parent].Transposed() * Turn[Index] : Turn[Index]).ToQuat();
     }
 
     // The hips: height by leg length, travel across the floor from the first
@@ -488,20 +544,20 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
         + Offset(TEXT("LeftLeg")).Size() + Offset(TEXT("LeftFoot")).Size()
         + FMath::Abs(FVector::DotProduct(Offset(TEXT("LeftToeBase")), SourceBoneUp));
     const int32 Pelvis = SourceBones[0];
-    if (SourceLeg > KINDA_SMALL_NUMBER && Pelvis != INDEX_NONE)
+    const bool bHips = SourceLeg > KINDA_SMALL_NUMBER && Pelvis != INDEX_NONE;
+    if (bHips)
     {
-        const double Scale = HipsHeight / SourceLeg;
         const FVector InCharacter = WorldToCharacter.Apply(WorldOf(Pelvis, 0).GetLocation());
         if (!bHasOrigin)
         {
             bHasOrigin = true;
             Origin = FVector(InCharacter.X, 0.0, InCharacter.Z);
         }
-        const FVector Scaled = (InCharacter - Origin) * Scale;
-        HipsLocation = HipsParentInverse.Apply(CharacterInComponent.Apply(Scaled));
         WireHips = (InCharacter - Origin) / SourceLeg;
     }
-    bHasPose = true;
+    // Posed here from the very frame the other clients are sent, by the step
+    // they use, so what this client shows is what they show.
+    SetFromWire(bHips ? &WireHips : nullptr, WireRotations, 1.0f);
 
     // On to the other clients, at its own rate: this runs every rendered frame.
     SincePublish += DeltaSeconds;
