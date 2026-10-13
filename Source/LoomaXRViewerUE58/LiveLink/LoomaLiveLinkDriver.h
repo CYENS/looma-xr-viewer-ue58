@@ -20,6 +20,10 @@ class USkeletalMeshComponent;
  *  - gives a character ANOTHER client is sending poses for the same instance,
  *    told to follow the scene instead: this client then needs no Live Link to
  *    show a character driven elsewhere;
+ *  - never drives a character whose component says the backend's hub has the
+ *    subject ("source": "hub", in one of its streams; HAM-329), even when a
+ *    subject of that name is live here. That is another performer, and the hub
+ *    drops a client's poses for it, so this client shows the hub's instead;
  *  - takes it back off one whose component went, or whose subject did, or whose
  *    poses stopped coming, and restarts the clip the node names.
  *

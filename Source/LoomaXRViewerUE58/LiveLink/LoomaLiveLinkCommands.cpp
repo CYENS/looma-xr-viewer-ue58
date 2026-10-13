@@ -271,7 +271,9 @@ namespace
         return Out;
     }
 
-    void Assign(UWorld* World, const FString& Subject, const FString& Name)
+    // `HubStream` set: the subject is the backend hub's, in that stream ("" for
+    // any of its streams), not this client's own (HAM-329).
+    void Assign(UWorld* World, const FString& Subject, const FString& Name, const FString* HubStream = nullptr)
     {
         UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
         ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
@@ -290,10 +292,33 @@ namespace
             {
                 if (It->GetWorld() == World && IsCharacter(*It))
                 {
-                    const FString& Now = It->GetComponents().LiveLinkSubject;
+                    const FString Now = LoomaLiveLink::DescribeSubject(It->GetComponents());
                     UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("  %s%s"), *It->DisplayName,
                            Now.IsEmpty() ? TEXT("") : *FString::Printf(TEXT("  (follows %s)"), *Now));
                 }
+            }
+            return;
+        }
+        if (HubStream && !Subject.IsEmpty())
+        {
+            TMap<FString, TArray<FString>> Streams;
+            Sync->GetHubLiveSubjects(Streams);
+            bool bLive = false;
+            for (const TPair<FString, TArray<FString>>& Stream : Streams)
+            {
+                bLive |= (HubStream->IsEmpty() || Stream.Key == *HubStream) && Stream.Value.Contains(Subject);
+            }
+            if (!bLive)
+            {
+                UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("The hub is not sending '%s'%s right now. Set anyway; the character moves when it is."),
+                       *Subject, HubStream->IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" in stream '%s'"), **HubStream));
+            }
+            for (ALoomaSyncedActor* Character : Characters)
+            {
+                const bool bSent = Sync->SetHubLiveLinkSubject(Character, *HubStream, Subject);
+                UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("%s: driven by the hub's %s%s"), *Character->DisplayName,
+                       HubStream->IsEmpty() ? *Subject : *FString::Printf(TEXT("%s in stream %s"), *Subject, **HubStream),
+                       bSent ? TEXT("") : TEXT(" (NOT sent)"));
             }
             return;
         }
@@ -335,6 +360,21 @@ namespace
             Assign(World, Args[0], FString::Join(Rest, TEXT(" ")));
         }));
 
+    FAutoConsoleCommandWithWorldAndArgs GAssignStream(
+        TEXT("Looma.LiveLink.AssignStream"),
+        TEXT("Have the backend's Live Link hub drive the selected character, in the scene: Looma.LiveLink.AssignStream <stream> <subject> [part of a character's name]. '*' is any of its streams."),
+        FConsoleCommandWithWorldAndArgsDelegate::CreateStatic([](const TArray<FString>& Args, UWorld* World) {
+            if (Args.Num() < 2)
+            {
+                UE_LOG(LogLoomaLiveLinkCommands, Warning, TEXT("Which stream and subject? Looma.LiveLink.AssignStream <stream> <subject> [part of a character's name]. Looma.LiveLink.Status lists the hub's."));
+                return;
+            }
+            const FString Stream = Args[0] == TEXT("*") ? FString() : Args[0];
+            TArray<FString> Rest = Args;
+            Rest.RemoveAt(0, 2);
+            Assign(World, Args[1], FString::Join(Rest, TEXT(" ")), &Stream);
+        }));
+
     FAutoConsoleCommandWithWorldAndArgs GUnassign(
         TEXT("Looma.LiveLink.Unassign"),
         TEXT("Remove the Live Link component from the selected character, in the scene: Looma.LiveLink.Unassign [part of a character's name]."),
@@ -367,17 +407,29 @@ namespace
                     UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("  subject %s"), *Key.SubjectName.Name.ToString());
                 }
             }
+            const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+            const ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
+            // What the backend's hub says it has (HAM-329): Looma.LiveLink.AssignStream picks from these.
+            TMap<FString, TArray<FString>> HubStreams;
+            if (Sync && Sync->GetHubLiveSubjects(HubStreams))
+            {
+                for (const TPair<FString, TArray<FString>>& Stream : HubStreams)
+                {
+                    UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("  hub stream %s: %s"),
+                           Stream.Key.IsEmpty() ? TEXT("(unnamed)") : *Stream.Key, *FString::Join(Stream.Value, TEXT(", ")));
+                }
+            }
             for (const USkeletalMeshComponent* Component : RigsIn(World))
             {
                 const ULoomaLivePoseAnimInstance* Instance = Cast<ULoomaLivePoseAnimInstance>(Component->GetAnimInstance());
+                const ALoomaSyncedActor* Actor = Cast<ALoomaSyncedActor>(Component->GetOwner());
                 FString Following = TEXT("not following");
                 if (Instance && Instance->IsFollowingScene())
                 {
-                    Following = TEXT("follows the pose another client sends");
+                    Following = Actor && Actor->GetComponents().IsLiveLinkFromHub()
+                        ? FString::Printf(TEXT("follows the hub's %s"), *LoomaLiveLink::DescribeSubject(Actor->GetComponents()))
+                        : FString(TEXT("follows the pose another client sends"));
                     // How far behind it is shown, and how unevenly its poses arrive (HAM-325).
-                    const ALoomaSyncedActor* Actor = Cast<ALoomaSyncedActor>(Component->GetOwner());
-                    const UGameInstance* GameInstance = World->GetGameInstance();
-                    const ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
                     double Delay = 0.0, Jitter = 0.0;
                     if (Actor && Sync && Sync->GetLivePoseTiming(Actor->Id, Delay, Jitter))
                     {
@@ -387,6 +439,10 @@ namespace
                 else if (Instance)
                 {
                     Following = FString::Printf(TEXT("follows %s"), *Instance->SubjectName.ToString());
+                }
+                else if (Actor && Actor->GetComponents().IsLiveLinkFromHub())
+                {
+                    Following = FString::Printf(TEXT("is the hub's %s, which is not sending"), *LoomaLiveLink::DescribeSubject(Actor->GetComponents()));
                 }
                 UE_LOG(LogLoomaLiveLinkCommands, Display, TEXT("  character %s: %s"), *GetNameSafe(Component->GetOwner()), *Following);
             }
