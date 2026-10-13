@@ -49,11 +49,18 @@ client of the scene. The code is in `Source/LoomaXRViewerUE58/LiveLink/`.
   Adding a vendor is adding a profile; the file documents every field.
 - **Who is driven** is a `livelink` component on the scene node, set in the web
   inspector or with `Looma.LiveLink.Assign`.
+- **The backend can drive a character itself** (HAM-328). Its Live Link hub reads
+  mocap on the server, in named streams set up in its `/admin`, and a component can
+  name one: `"source": "hub", "stream": "studio-b"`. This viewer then never drives
+  that character from its own Live Link, even when it has a subject of the same
+  name, because that is another performer. It shows the hub's poses instead
+  (HAM-329).
 
 | Console | What it does |
 | --- | --- |
-| `Looma.LiveLink.Status` | Sources, subjects, and what each character follows |
-| `Looma.LiveLink.Assign <subject> [name]` / `Unassign [name]` | Choose which character a subject drives: the selected one, or one whose name contains `name` |
+| `Looma.LiveLink.Status` | Sources, subjects, the hub's streams, and what each character follows |
+| `Looma.LiveLink.Assign <subject> [name]` / `Unassign [name]` | Choose which character one of this viewer's subjects drives: the selected one, or one whose name contains `name` |
+| `Looma.LiveLink.AssignStream <stream> <subject> [name]` | Have the backend's hub drive it instead, from one of its streams (`*` for any) |
 | `Looma.LiveLink.Listen` / `ListenXsens` | Start a reader by hand; both start on their own |
 | `Looma.LiveLink.FindFloor 0` | Trust the mocap system's zero height, not the performer's feet |
 
