@@ -421,7 +421,11 @@ void ULoomaLivePoseAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
         ULoomaSceneSyncSubsystem* Sync = GameInstance ? GameInstance->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
         if (Actor && Sync)
         {
-            Sync->PublishPose(Actor->Id, WireHips, WireRotations);
+            // Stamped with when Live Link says the frame was captured, on the
+            // engine's clock, so a take the hub records keeps the capture's
+            // spacing and not whatever the network did to it on the way.
+            Sync->PublishPose(Actor->Id, WireHips, WireRotations,
+                              Frame.FrameData.GetBaseData()->WorldTime.GetOffsettedTime());
         }
     }
 }
