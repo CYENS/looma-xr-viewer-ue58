@@ -48,6 +48,7 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
     virtual void PossessedBy(AController* NewController) override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     // The mapping context `Looma.VR` passes to OpenXR when the session begins.
     UInputMappingContext* GetMappingContext() const { return MappingContext; }
@@ -138,6 +139,10 @@ private:
     bool bAiming = false;
     bool bHaveTeleportTarget = false;
     FVector TeleportTarget = FVector::ZeroVector;
+
+    // Telling the scene where we are (HAM-311 part 1): see PublishPresence.
+    void PublishPresence(float DeltaSeconds);
+    float PresenceCountdown = 0.f;
 
     bool bPendingHandover = false;
     FVector HandoverLocation = FVector::ZeroVector;

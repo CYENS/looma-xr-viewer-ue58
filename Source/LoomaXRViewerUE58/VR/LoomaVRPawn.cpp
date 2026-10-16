@@ -165,6 +165,40 @@ void ALoomaVRPawn::PossessedBy(AController* NewController)
     }
 }
 
+// Where we are, for everyone else on the scene (HAM-311 part 1): the head and the
+// hands, twenty times a second, as the web client sends while in VR. They draw us as
+// a head in our colour, two hands and our name, and so does any other viewer. Not
+// before the handover has put us where the desktop view was, or the first poses
+// would be wherever the tracking space happened to start.
+void ALoomaVRPawn::PublishPresence(float DeltaSeconds)
+{
+    PresenceCountdown -= DeltaSeconds;
+    if (PresenceCountdown > 0.f || bPendingHandover)
+    {
+        return;
+    }
+    PresenceCountdown = 0.05f;
+    ULoomaSceneSyncSubsystem* Sync = GetGameInstance() ? GetGameInstance()->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr;
+    if (!Sync)
+    {
+        return;
+    }
+    Sync->SendClientPose(Camera->GetComponentTransform(),
+        LeftGrip->IsTracked(), LeftGrip->GetComponentTransform(),
+        RightGrip->IsTracked(), RightGrip->GetComponentTransform(),
+        TEXT("vr-head"));
+}
+
+// Leaving VR destroys this pawn: we are no longer anywhere to be shown.
+void ALoomaVRPawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (ULoomaSceneSyncSubsystem* Sync = GetGameInstance() ? GetGameInstance()->GetSubsystem<ULoomaSceneSyncSubsystem>() : nullptr)
+    {
+        Sync->ClearClientPose();
+    }
+    Super::EndPlay(EndPlayReason);
+}
+
 void ALoomaVRPawn::SetHandover(const FVector& ViewLocation, float ViewYaw, float FloorZ)
 {
     HandoverLocation = ViewLocation;
@@ -207,6 +241,7 @@ void ALoomaVRPawn::Tick(float DeltaSeconds)
     {
         Handover();
     }
+    PublishPresence(DeltaSeconds);
 
     const FVector2D Move = MoveValue ? MoveValue->GetValue().Get<FVector2D>() : FVector2D::ZeroVector;
     FVector2D Look(LookXValue ? LookXValue->GetValue().Get<float>() : 0.f,
