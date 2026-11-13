@@ -13,6 +13,10 @@ public class LoomaXRViewerUE58 : ModuleRules
 		// The Live Link proof (HAM-316): a JSON-over-UDP source and a pose applier, in LiveLink/.
 		PrivateDependencyModuleNames.AddRange(new string[] { "LiveLinkInterface", "Sockets", "Networking", "Json", "LoomaSceneSync" });
 
+		// VR mode (VR-9), in VR/: the headset pawn, its motion controllers, and the
+		// OpenXR session it starts with its own input bound.
+		PrivateDependencyModuleNames.AddRange(new string[] { "HeadMountedDisplay", "XRBase", "OpenXRInput" });
+
 		// Looma.LiveLink.Assign reads the editor's selection, so a character can be picked in the outliner.
 		if (Target.bBuildEditor)
 		{

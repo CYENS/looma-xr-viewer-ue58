@@ -85,6 +85,60 @@ $editor = 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor
 > backend when play begins, so every `-game` launch of this project adds one to the
 > queue. Do not start the viewer in a loop or from a script without knowing that.
 
+## VR (VR-9)
+
+`Looma.VR` in the console puts you in the scene in a headset, through OpenXR:
+a Quest over Link or Air Link, or any SteamVR headset. You stand on the floor
+under the current view, facing the way it faced; `Looma.VR` again (or
+`Looma.VR 0`) puts the previous pawn where your head was. `-LoomaVR` on the
+command line enters as soon as play begins.
+
+| Control | What it does |
+| --- | --- |
+| Left stick | Walk where you look (flying: along the view) |
+| Left stick click | Fly on or off; off puts you back on the floor |
+| Right stick left / right | Snap turn, 45 degrees |
+| Right stick up | Aim the teleport arc; let go to jump to the ring (walking) |
+| Right stick up / down | Rise and sink (flying) |
+| Right trigger | Select what the laser points at; pointing at nothing clears the selection |
+| Right grip | Carry it: it hangs off the end of the laser and stays upright; the stick pushes, pulls and turns it |
+
+The same controls as the web client's VR mode
+([looma-xr-asset-demo `docs/vr.md`](https://github.com/CYENS/looma-xr-asset-demo/blob/main/docs/vr.md)),
+so a person moves the same way in either. A carried node is simply moved, and
+`LoomaSceneSync`'s outbound diff sends the move to the room like any other;
+selecting goes through its `SelectNode`. Nodes are picked by their bounds
+rather than by collision, because the models loaded at runtime carry none.
+
+**Run it on a PC that is not the generation box.** Stereo at 72 to 90 Hz on
+the RTX 5090 competes with TRELLIS.2 and Kimodo for the GPU, and the models are
+what everyone else is waiting on.
+
+**Rendering.** The project renders with Lumen, hardware ray tracing and virtual
+shadow maps. Entering VR swaps in a lighter profile (no Lumen GI, screen-space
+reflections, classic shadow maps, no ray-traced shadows, 90% screen
+percentage) and leaving puts every value back. Instanced stereo
+(`vr.InstancedStereo=True` in `DefaultEngine.ini`) would halve the draw cost of
+the second eye, but it recompiles every shader, so it is left for whoever sets
+up the VR PC.
+
+**Input** is built in code (`Source/LoomaXRViewerUE58/VR/LoomaVRPawn.cpp`): six
+Enhanced Input actions and a mapping context onto the Touch controllers' keys,
+which `Looma.VR` hands to OpenXR when it starts the session
+(`UOpenXRInputFunctionLibrary::BeginXRSession`), since OpenXR needs every
+binding before a session begins.
+
+**Tests.** `Looma.VR.*` covers the maths: sticks, snap turn about the head, the
+handover from the desktop view, teleport, and the upright ray grab.
+
+```powershell
+& $editor "$PWD\LoomaXRViewerUE58.uproject" -ExecCmds="Automation RunTests Looma.VR; Quit" -unattended -nullrhi -nosplash -nosound -stdout
+```
+
+**Not yet:** the menu, voice and the keyboard of the web's VR mode; selecting
+and carrying with the left hand; and a run on a real headset, which this first
+version has not had.
+
 ## Remote selection outlines (HAM-159 / HAM-209)
 
 `LoomaSceneSync` marks what everybody else in the room has selected; it never draws.
