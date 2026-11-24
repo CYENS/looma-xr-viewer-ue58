@@ -36,37 +36,6 @@ namespace
     TAutoConsoleVariable<int32> CVarBuffer(
         TEXT("Looma.LiveLink.Buffer"), 1,
         TEXT("1: show a character another client drives a little in the past, between two received poses, so uneven arrival does not show. 0: chase the newest pose."));
-
-    /** "mixamorig:Hips", "mixamorig_Hips" -> the part after the rig prefix. */
-    FString Bare(const FName& Name)
-    {
-        FString Text = Name.ToString();
-        int32 Cut = INDEX_NONE;
-        if (Text.FindLastChar(TEXT(':'), Cut))
-        {
-            Text.RightChopInline(Cut + 1);
-        }
-        for (const TCHAR* Prefix : {TEXT("mixamorig_"), TEXT("mixamorig")})
-        {
-            if (Text.StartsWith(Prefix, ESearchCase::IgnoreCase))
-            {
-                Text.RightChopInline(FCString::Strlen(Prefix));
-                break;
-            }
-        }
-        return Text;
-    }
-
-    /** `Raw` with its parts along the given unit axes removed, normalised. */
-    FVector Orthogonal(FVector Raw, const FVector& A, const FVector* B = nullptr)
-    {
-        Raw -= FVector::DotProduct(Raw, A) * A;
-        if (B)
-        {
-            Raw -= FVector::DotProduct(Raw, *B) * (*B);
-        }
-        return Raw.GetSafeNormal();
-    }
 }
 
 // --- The proxy ----------------------------------------------------------------------
@@ -79,7 +48,7 @@ void FLoomaLivePoseProxy::PreUpdate(UAnimInstance* InAnimInstance, float DeltaSe
         Rotations = Instance->Rotations;
         HasRotation = Instance->HasRotation;
         HipsLocation = Instance->HipsLocation;
-        HipsBone = Instance->HipsBone;
+        HipsBone = Instance->Target.HipsBone;
         bHasPose = Instance->bHasPose;
     }
 }
@@ -141,36 +110,23 @@ void ULoomaLivePoseAnimInstance::FollowScene(bool bFollow)
 
 void ULoomaLivePoseAnimInstance::SetFromWire(const FVector* Hips, const TArray<FQuat>& Wire, float Alpha)
 {
-    const FLoomaBasis BoneToCharacter = CharacterInBone.Transposed();
     for (int32 Index = 0; Index < LoomaRigBody::Num && Index < Wire.Num(); ++Index)
     {
-        const int32 To = TargetBones[Index];
+        const int32 To = Target.Bones[Index];
         FQuat Sent = Wire[Index];
         if (To == INDEX_NONE || Sent.SizeSquared() < 1e-12)
         {
             continue;
         }
         Sent.Normalize();
-        // The wire's rotation is the bone's turn from its T-pose in the
-        // character's left, up, forward; here it is written in this mesh's bone.
-        const FLoomaBasis LocalTurn = FLoomaBasis::FromQuat(Sent);
-        FQuat Target;
-        if (LoomaRigBody::Parent(Index) < 0)
-        {
-            const FLoomaBasis InComponent = CharacterInComponent * LocalTurn * CharacterInComponent.Transposed() * HipsRest;
-            Target = (HipsParentInverse * InComponent).ToQuat();
-        }
-        else
-        {
-            Target = (CharacterInBone * LocalTurn * BoneToCharacter).ToQuat();
-        }
-        Rotations[To] = Alpha >= 1.0f || !HasRotation[To] ? Target : FQuat::Slerp(Rotations[To], Target, Alpha);
+        const FQuat Wanted = Target.Rotation(Index, Sent);
+        Rotations[To] = Alpha >= 1.0f || !HasRotation[To] ? Wanted : FQuat::Slerp(Rotations[To], Wanted, Alpha);
         HasRotation[To] = true;
     }
     if (Hips)
     {
-        const FVector Target = HipsParentInverse.Apply(CharacterInComponent.Apply(*Hips * HipsHeight));
-        HipsLocation = Alpha >= 1.0f ? Target : FMath::Lerp(HipsLocation, Target, Alpha);
+        const FVector Wanted = Target.HipsLocation(*Hips);
+        HipsLocation = Alpha >= 1.0f ? Wanted : FMath::Lerp(HipsLocation, Wanted, Alpha);
     }
     bHasPose = true;
 }
@@ -217,86 +173,25 @@ bool ULoomaLivePoseAnimInstance::BuildTarget()
         return false;
     }
     const FReferenceSkeleton& Skeleton = Mesh->GetRefSkeleton();
-    BoneCount = Skeleton.GetNum();
-
-    TMap<FString, int32> ByName;
-    for (int32 Bone = 0; Bone < BoneCount; ++Bone)
+    FString Why;
+    if (!Target.Build(Skeleton, Why))
     {
-        ByName.Add(Bare(Skeleton.GetBoneName(Bone)), Bone);
-    }
-    TargetBones.Init(INDEX_NONE, LoomaRigBody::Num);
-    for (int32 Index = 0; Index < LoomaRigBody::Num; ++Index)
-    {
-        if (const int32* Found = ByName.Find(LoomaRigBody::Name(Index)))
-        {
-            TargetBones[Index] = *Found;
-        }
-    }
-    auto Bone = [this](const TCHAR* Name) { return TargetBones[LoomaRigBody::Row(Name)]; };
-    HipsBone = Bone(TEXT("Hips"));
-    for (const TCHAR* Needed : {TEXT("Hips"), TEXT("Head"), TEXT("LeftUpLeg"), TEXT("RightUpLeg"),
-                                TEXT("LeftFoot"), TEXT("LeftToeBase"), TEXT("RightFoot"), TEXT("RightToeBase")})
-    {
-        if (Bone(Needed) == INDEX_NONE)
-        {
-            UE_LOG(LogLoomaLivePose, Warning, TEXT("%s is not a LoomaMixamo rig: no %s bone."),
-                   *Mesh->GetName(), Needed);
-            return false;
-        }
-    }
-
-    // The reference pose in component space.
-    const TArray<FTransform>& Local = Skeleton.GetRefBonePose();
-    TArray<FTransform> World;
-    World.SetNum(BoneCount);
-    for (int32 Index = 0; Index < BoneCount; ++Index)
-    {
-        const int32 Parent = Skeleton.GetParentIndex(Index);
-        World[Index] = Parent >= 0 ? Local[Index] * World[Parent] : Local[Index];
-    }
-    auto At = [&World, &Bone](const TCHAR* Name) { return World[Bone(Name)].GetLocation(); };
-
-    const FVector Left = (At(TEXT("LeftUpLeg")) - At(TEXT("RightUpLeg"))).GetSafeNormal();
-    const FVector Up = Orthogonal(At(TEXT("Head")) - At(TEXT("Hips")), Left);
-    const FVector Forward = Orthogonal(
-        (At(TEXT("LeftToeBase")) - At(TEXT("LeftFoot"))) + (At(TEXT("RightToeBase")) - At(TEXT("RightFoot"))),
-        Left, &Up);
-    if (Left.IsNearlyZero() || Up.IsNearlyZero() || Forward.IsNearlyZero())
-    {
-        UE_LOG(LogLoomaLivePose, Warning, TEXT("%s: the reference pose is degenerate."), *Mesh->GetName());
-        return false;
-    }
-    CharacterInComponent = FLoomaBasis::FromColumns(Left, Up, Forward);
-
-    // Every bone is identity in the T-pose, so every bone's T-pose frame is the hips'.
-    HipsRest = FLoomaBasis::FromQuat(World[HipsBone].GetRotation());
-    CharacterInBone = HipsRest.Transposed() * CharacterInComponent;
-    const int32 HipsParent = Skeleton.GetParentIndex(HipsBone);
-    HipsParentInverse = HipsParent >= 0
-        ? FLoomaBasis::FromQuat(World[HipsParent].GetRotation()).Transposed()
-        : FLoomaBasis();
-    // Above the floor, which the rig format puts at the mesh's origin ("feet at
-    // y = 0"): the `hips_height` the wire's hips are in units of, and what the
-    // web multiplies by. Not above the toe joints, which sit a centimetre or two
-    // over the floor and would leave this client's character that much lower
-    // than everybody else's.
-    HipsHeight = FVector::DotProduct(At(TEXT("Hips")), Up);
-    if (HipsHeight <= KINDA_SMALL_NUMBER)
-    {
-        UE_LOG(LogLoomaLivePose, Warning, TEXT("%s: the hips are not above the mesh's origin."), *Mesh->GetName());
+        UE_LOG(LogLoomaLivePose, Warning, TEXT("%s: %s."), *Mesh->GetName(), *Why);
         return false;
     }
 
-    Rotations.Init(FQuat::Identity, BoneCount);
-    HasRotation.Init(false, BoneCount);
+    Rotations.Init(FQuat::Identity, Target.BoneCount);
+    HasRotation.Init(false, Target.BoneCount);
     WireRotations.Init(FQuat::Identity, LoomaRigBody::Num);
-    HipsLocation = Local[HipsBone].GetLocation();
+    const TArray<FTransform>& Local = Skeleton.GetRefBonePose();
+    HipsLocation = Local[Target.HipsBone].GetLocation();
 
-    const int32 Spine = TargetBones[LoomaRigBody::Row(TEXT("Spine"))];
+    const int32 Spine = Target.Bones[LoomaRigBody::Row(TEXT("Spine"))];
     UE_LOG(LogLoomaLivePose, Log,
            TEXT("%s: %d bones, hips %.1f above the floor; left %s up %s forward %s; hips rest %s, spine rest %s."),
-           *Mesh->GetName(), BoneCount, HipsHeight, *Left.ToCompactString(), *Up.ToCompactString(),
-           *Forward.ToCompactString(), *World[HipsBone].GetRotation().Rotator().ToCompactString(),
+           *Mesh->GetName(), Target.BoneCount, Target.HipsHeight, *Target.Left.ToCompactString(),
+           *Target.Up.ToCompactString(), *Target.Forward.ToCompactString(),
+           *Target.HipsRestRotation.Rotator().ToCompactString(),
            Spine != INDEX_NONE ? *Local[Spine].GetRotation().Rotator().ToCompactString() : TEXT("-"));
     return true;
 }
