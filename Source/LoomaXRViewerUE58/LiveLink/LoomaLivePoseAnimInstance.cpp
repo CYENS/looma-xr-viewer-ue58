@@ -188,11 +188,20 @@ bool ULoomaLivePoseAnimInstance::BuildTarget()
 
     const int32 Spine = Target.Bones[LoomaRigBody::Row(TEXT("Spine"))];
     UE_LOG(LogLoomaLivePose, Log,
-           TEXT("%s: %d bones, hips %.1f above the floor; left %s up %s forward %s; hips rest %s, spine rest %s."),
+           TEXT("%s: %d bones, hips %.1f above the floor; left %s up %s forward %s; hips rest %s, spine rest %s; the body leans %.1f degrees from that up."),
            *Mesh->GetName(), Target.BoneCount, Target.HipsHeight, *Target.Left.ToCompactString(),
            *Target.Up.ToCompactString(), *Target.Forward.ToCompactString(),
            *Target.HipsRestRotation.Rotator().ToCompactString(),
-           Spine != INDEX_NONE ? *Local[Spine].GetRotation().Rotator().ToCompactString() : TEXT("-"));
+           Spine != INDEX_NONE ? *Local[Spine].GetRotation().Rotator().ToCompactString() : TEXT("-"), Target.Lean);
+    if (!Target.bUpFromOrigin || !Target.bForwardFromArms)
+    {
+        // Not laid out as the rig format lays a rig out, so its axes are a
+        // measurement of its shape and it may not stand exactly where the web has it.
+        UE_LOG(LogLoomaLivePose, Warning, TEXT("%s: %s%s%s; its axes are measured from its shape instead."), *Mesh->GetName(),
+               Target.bUpFromOrigin ? TEXT("") : TEXT("the hips do not rest over the mesh's origin"),
+               Target.bUpFromOrigin || Target.bForwardFromArms ? TEXT("") : TEXT(", and "),
+               Target.bForwardFromArms ? TEXT("") : TEXT("the upper arms do not rest turned about forward"));
+    }
     return true;
 }
 

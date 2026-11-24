@@ -76,16 +76,78 @@ bool FLoomaLiveTarget::Build(const FReferenceSkeleton& Skeleton, FString& OutWhy
     }
     auto At = [&World, &Bone](const TCHAR* Name) { return World[Bone(Name)].GetLocation(); };
 
-    Left = (At(TEXT("LeftUpLeg")) - At(TEXT("RightUpLeg"))).GetSafeNormal();
-    Up = Orthogonal(At(TEXT("Head")) - At(TEXT("Hips")), Left);
-    Forward = Orthogonal(
-        (At(TEXT("LeftToeBase")) - At(TEXT("LeftFoot"))) + (At(TEXT("RightToeBase")) - At(TEXT("RightFoot"))),
-        Left, &Up);
+    // What the body's own shape says: hip to hip, hips to head, heel to toe. Close,
+    // and never exact: a head that rests a few centimetres behind the hips leans
+    // this "up" by several degrees. It is only what the rig is checked against,
+    // and the fallback for a skeleton the rig format does not describe.
+    const FVector ShapeLeft = (At(TEXT("LeftUpLeg")) - At(TEXT("RightUpLeg"))).GetSafeNormal();
+    const FVector ShapeUp = Orthogonal(At(TEXT("Head")) - At(TEXT("Hips")), ShapeLeft);
+    const FVector Toes = (At(TEXT("LeftToeBase")) - At(TEXT("LeftFoot"))) + (At(TEXT("RightToeBase")) - At(TEXT("RightFoot")));
+    const FVector ShapeForward = Orthogonal(Toes, ShapeLeft, &ShapeUp);
+    if (ShapeLeft.IsNearlyZero() || ShapeUp.IsNearlyZero() || ShapeForward.IsNearlyZero())
+    {
+        OutWhy = TEXT("the reference pose is degenerate");
+        return false;
+    }
+
+    // The character's left, up, forward are the rig FILE's X, Y, Z: the wire's
+    // rotations and its hips are written in those, and the web sets them as they
+    // come. So they are read here from what the format fixes for every rig
+    // (docs/rig-format.md in looma-xr-asset-demo), not from how this body is built:
+    //
+    //  * up, from the origin to the hips. The origin is on the floor straight
+    //    below the hips joint ("glTF layout", rule 7).
+    //  * forward, the axis the upper arms rest turned about. The rest pose is the
+    //    T-pose with each upper arm let down about +Z and nothing else ("The rest
+    //    pose is an A-pose"), so that axis is the file's Z whatever the angle.
+    //
+    // Which way round each runs is taken from the shape, which is good to tens of
+    // degrees and is asked only for a sign. A skeleton that does not keep to the
+    // format (hips not over the origin, arms not turned about forward) takes the
+    // axis it lacks from its shape, as every rig once did, and says so.
+    const double Near = FMath::Cos(FMath::DegreesToRadians(30.0));
+    Up = At(TEXT("Hips")).GetSafeNormal();
+    bUpFromOrigin = FVector::DotProduct(Up, ShapeUp) >= Near;
+    if (!bUpFromOrigin)
+    {
+        Up = ShapeUp;
+    }
+    const FVector ToesAcross = Orthogonal(Toes, Up);
+    FVector Turned = FVector::ZeroVector;
+    for (const TCHAR* Arm : {TEXT("LeftArm"), TEXT("RightArm")})
+    {
+        const int32 ArmBone = Bone(Arm);
+        const int32 Parent = ArmBone != INDEX_NONE ? Skeleton.GetParentIndex(ArmBone) : INDEX_NONE;
+        if (Parent < 0)
+        {
+            continue;
+        }
+        const FQuat Rest = Local[ArmBone].GetRotation().GetNormalized();
+        if (FMath::Abs(Rest.W) > FMath::Cos(FMath::DegreesToRadians(2.5)))
+        {
+            continue; // turned less than five degrees: this rig rests in a T-pose
+        }
+        const FVector Axis = World[Parent].GetRotation().RotateVector(FVector(Rest.X, Rest.Y, Rest.Z).GetSafeNormal());
+        Turned += FVector::DotProduct(Axis, ToesAcross) >= 0.0 ? Axis : -Axis;
+    }
+    Forward = Orthogonal(Turned, Up);
+    bForwardFromArms = FVector::DotProduct(Forward, ToesAcross) >= Near;
+    if (!bForwardFromArms)
+    {
+        Forward = ToesAcross;
+    }
+    Left = FVector::CrossProduct(Up, Forward).GetSafeNormal();
+    if (FVector::DotProduct(Left, ShapeLeft) < 0.0)
+    {
+        Left = -Left;
+    }
     if (Left.IsNearlyZero() || Up.IsNearlyZero() || Forward.IsNearlyZero())
     {
         OutWhy = TEXT("the reference pose is degenerate");
         return false;
     }
+    Lean = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(
+        FVector::DotProduct(Up, (At(TEXT("Head")) - At(TEXT("Hips"))).GetSafeNormal()), -1.0, 1.0)));
     CharacterInComponent = FLoomaBasis::FromColumns(Left, Up, Forward);
 
     // Every bone is identity in the T-pose, so every bone's T-pose frame is the hips'.

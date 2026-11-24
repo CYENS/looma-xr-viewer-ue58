@@ -45,7 +45,7 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
  * source's world. `turn` is how far the bone has turned from its T-pose, in the
  * performer's own left, up, forward: the identity in the T-pose, whatever the
  * vendor. The rig bone takes the same turn, written in the rig's axes, which
- * are measured from its reference pose (hip to hip, hips to head, heel to toe).
+ * are the rig file's own and are read from its reference pose (FLoomaLiveTarget).
  *
  * Which Live Link bone drives which rig bone, and the two sets of axes, are a
  * PROFILE: data, in `Config/LiveLinkProfiles.json`. Adding a vendor is adding a

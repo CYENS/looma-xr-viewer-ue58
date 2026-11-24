@@ -10,6 +10,16 @@ struct FReferenceSkeleton;
  * rotations out (HAM-316). FLoomaLiveRetarget is the source half. This one reads
  * a reference skeleton and needs no mesh, so a test can call it;
  * ULoomaLivePoseAnimInstance, which has the mesh, explains the arithmetic.
+ *
+ * The wire is in the rig FILE's axes, X to the character's left, Y up, Z
+ * forward, and the web sets what it is sent on its bones as it comes. For this
+ * mesh to stand where the web's does, those three axes have to be found in its
+ * component space exactly. They are read from what the format fixes for every
+ * rig, the origin under the hips and the axis the arms rest turned about, not
+ * from the body's shape (hip to hip, hips to head, heel to toe): a generated
+ * body's head rests up to seven degrees off the vertical through its hips, and
+ * a character posed in axes that lean by that much rises or sinks by a tenth
+ * of the distance its performer walks, and tips over when they turn.
  */
 struct LOOMAXRVIEWERUE58_API FLoomaLiveTarget
 {
@@ -35,10 +45,20 @@ struct LOOMAXRVIEWERUE58_API FLoomaLiveTarget
     TArray<int32> Bones;
     /** The hips above the floor in the reference pose, component units. */
     double HipsHeight = 0.0;
-    /** The character's left, up and forward in component space. */
+    /**
+     * The character's left, up and forward in component space: the rig file's X,
+     * Y and Z, read from what the rig format fixes for every rig, whatever the
+     * body's proportions and posture.
+     */
     FVector Left = FVector::ZeroVector;
     FVector Up = FVector::ZeroVector;
     FVector Forward = FVector::ZeroVector;
+    /** Up runs from the mesh's origin to the hips, as the format has it. False: taken from the body's shape instead. */
+    bool bUpFromOrigin = false;
+    /** Forward is the axis the upper arms rest turned about, as the format has it. False: taken from the toes instead. */
+    bool bForwardFromArms = false;
+    /** Degrees between up and the line from the hips to the head: how far this body's shape leans from its file's axes. */
+    double Lean = 0.0;
     /** The hips' rotation in the reference pose, in component space. */
     FQuat HipsRestRotation = FQuat::Identity;
 
