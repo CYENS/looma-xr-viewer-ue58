@@ -5,6 +5,7 @@
 #include "Animation/AnimInstanceProxy.h"
 #include "LoomaLiveLinkProfiles.h"
 #include "LoomaLiveRetarget.h"
+#include "LoomaLiveTarget.h"
 #include "LoomaPoseSmoother.h"
 #include "LoomaLivePoseAnimInstance.generated.h"
 
@@ -44,7 +45,7 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
  * source's world. `turn` is how far the bone has turned from its T-pose, in the
  * performer's own left, up, forward: the identity in the T-pose, whatever the
  * vendor. The rig bone takes the same turn, written in the rig's axes, which
- * are measured from its reference pose (hip to hip, hips to head, heel to toe).
+ * are the rig file's own and are read from its reference pose (FLoomaLiveTarget).
  *
  * Which Live Link bone drives which rig bone, and the two sets of axes, are a
  * PROFILE: data, in `Config/LiveLinkProfiles.json`. Adding a vendor is adding a
@@ -62,8 +63,9 @@ struct FLoomaLivePoseProxy : public FAnimInstanceProxy
  *
  * The Moverse maths was checked outside Unreal first, by posing a generated rig
  * with the simulator's recorded frames in Python. The source half, a Live Link
- * frame to a wire pose, is FLoomaLiveRetarget, apart from this class so that
- * Tests/LoomaLiveRetargetTests.cpp can run it with no mesh.
+ * frame to a wire pose, is FLoomaLiveRetarget, and the target half, a wire pose
+ * to this mesh's bones, is FLoomaLiveTarget: both apart from this class so that
+ * the tests in Tests/ can run them with no mesh.
  *
  * A source that shakes, such as a camera-based capture, is steadied on the way
  * (FLoomaPoseSmoother), by as much as its profile says. The wire pose is what
@@ -131,15 +133,7 @@ private:
 
     // --- The target rig, measured once from its reference pose ---------------
     bool bTargetReady = false;
-    int32 BoneCount = 0;
-    int32 HipsBone = INDEX_NONE;
-    /** Mesh bone index for each row of the bone table, or INDEX_NONE. */
-    TArray<int32> TargetBones;
-    FLoomaBasis CharacterInComponent; // columns: left, up, forward
-    FLoomaBasis CharacterInBone;      // A_t
-    FLoomaBasis HipsRest;             // the hips' T-pose rotation in component space
-    FLoomaBasis HipsParentInverse;
-    double HipsHeight = 0.0;          // the hips above the floor in the reference pose, component units
+    FLoomaLiveTarget Target;
 
     // --- The source skeleton, mapped when its bone names first arrive ---------
     TArray<FName> SourceNames;
